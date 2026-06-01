@@ -11,8 +11,11 @@ import { memoriesRoutes } from './routes/memories.route.js';
 import { sessionsRoutes } from './routes/sessions.route.js';
 import { entitiesRoutes } from './routes/entities.route.js';
 import { projectsRoutes } from './routes/projects.route.js';
+import { adminRoutes } from './routes/admin.route.js';
 import { mcpRoutes } from './mcp/server.js';
 import { startDistillationWorker, scheduleStaleSessionCheck, stopStaleSessionCheck } from './jobs/distillation.worker.js';
+import { scheduleConsolidationCheck, stopConsolidationCheck } from './jobs/consolidation.worker.js';
+import { scheduleDeduplication, stopDeduplication } from './jobs/deduplication.worker.js';
 
 const app = Fastify({
   logger: {
@@ -61,6 +64,7 @@ await app.register(memoriesRoutes, { prefix: '/v1' });
 await app.register(sessionsRoutes, { prefix: '/v1' });
 await app.register(entitiesRoutes, { prefix: '/v1' });
 await app.register(projectsRoutes, { prefix: '/v1' });
+await app.register(adminRoutes, { prefix: '/v1' });
 await app.register(mcpRoutes);
 
 // ── Error Handler ────────────────────────────────────────────
@@ -106,6 +110,12 @@ async function start() {
     await scheduleStaleSessionCheck();
     app.log.info('Stale session checker started');
 
+    await scheduleConsolidationCheck();
+    app.log.info('Temporal memory consolidation worker started');
+
+    await scheduleDeduplication();
+    app.log.info('Deduplication worker started (runs weekly)');
+
     // Start server
     await app.listen({ port: config.server.port, host: config.server.host });
     app.log.info(`MemoryAI API running on http://${config.server.host}:${config.server.port}`);
@@ -121,6 +131,8 @@ async function start() {
 const shutdown = async (signal: string) => {
   app.log.info(`Received ${signal}, shutting down gracefully...`);
   stopStaleSessionCheck();
+  stopConsolidationCheck();
+  stopDeduplication();
   await app.close();
   await pool.end();
   process.exit(0);

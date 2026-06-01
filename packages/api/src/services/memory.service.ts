@@ -2,6 +2,7 @@ import { query, withTransaction } from '../db/pool.js';
 import { embeddingService } from './embedding.service.js';
 import { contextBundleService } from './context-bundle.service.js';
 import { encrypt, decrypt, isEncrypted } from '../utils/encryption.js';
+import { auditService } from './audit.service.js';
 import type {
   Memory, MemorySearchResult, CoreMemory,
   CreateMemoryDto, UpdateMemoryDto, SearchMemoriesDto,
@@ -21,15 +22,25 @@ function prepareContent(content: string, category: MemoryCategory): string {
   return ENCRYPTED_CATEGORIES.includes(category) ? encrypt(content) : content;
 }
 
-function decryptContent(memory: Memory): Memory {
+function decryptContent(memory: Memory, userId?: string): Memory {
   if (isEncrypted(memory.content)) {
-    return { ...memory, content: decrypt(memory.content) };
+    const plain = decrypt(memory.content);
+    if (userId) {
+      auditService.log({
+        userId,
+        memoryId: memory.id,
+        operation: 'decrypt',
+        category: memory.category,
+        contentPreview: plain.slice(0, 60),
+      });
+    }
+    return { ...memory, content: plain };
   }
   return memory;
 }
 
-function decryptResults<T extends Memory>(rows: T[]): T[] {
-  return rows.map(r => (isEncrypted(r.content) ? { ...r, content: decrypt(r.content) } : r));
+function decryptResults<T extends Memory>(rows: T[], userId?: string): T[] {
+  return rows.map(r => (isEncrypted(r.content) ? decryptContent(r as unknown as Memory, userId) as unknown as T : r));
 }
 
 export const memoryService = {
@@ -68,7 +79,7 @@ export const memoryService = {
       contextBundleService.invalidate(userId).catch(() => {});
     }
 
-    return decryptContent(res.rows[0]);
+    return decryptContent(res.rows[0], userId);
   },
 
   async createBatch(userId: string, items: CreateMemoryDto[]): Promise<Memory[]> {
@@ -108,7 +119,7 @@ export const memoryService = {
             vectorLiteral,
           ]
         );
-        result.push(decryptContent(res.rows[0]));
+        result.push(decryptContent(res.rows[0], userId));
         if (res.rows[0].tier === 'core' || res.rows[0].tier === 'hot' || isShared) {
           invalidateBundle = true;
         }
@@ -156,7 +167,7 @@ export const memoryService = {
       ]
     );
 
-    const results = decryptResults(res.rows.map(r => ({ ...r, user_id: userId })));
+    const results = decryptResults(res.rows.map(r => ({ ...r, user_id: userId })), userId);
 
     // Update access stats async (triggers auto-promotion to hot tier)
     if (results.length > 0) {
@@ -187,7 +198,7 @@ export const memoryService = {
       `SELECT ${MEMORY_COLS} FROM memories WHERE id = $1 AND user_id = $2`,
       [id, userId]
     );
-    return res.rows[0] ? decryptContent(res.rows[0]) : null;
+    return res.rows[0] ? decryptContent(res.rows[0], userId) : null;
   },
 
   async list(userId: string, pagination: PaginationQuery & {
@@ -225,7 +236,7 @@ export const memoryService = {
     ]);
 
     return {
-      data: decryptResults(dataRes.rows),
+      data: decryptResults(dataRes.rows, userId),
       total: parseInt(countRes.rows[0].count, 10),
     };
   },
@@ -274,7 +285,7 @@ export const memoryService = {
       contextBundleService.invalidate(userId).catch(() => {});
     }
 
-    return res.rows[0] ? decryptContent(res.rows[0]) : null;
+    return res.rows[0] ? decryptContent(res.rows[0], userId) : null;
   },
 
   async delete(userId: string, id: string): Promise<boolean> {

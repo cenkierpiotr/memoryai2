@@ -149,7 +149,14 @@ CREATE TABLE memories (
   updated_at      TIMESTAMPTZ DEFAULT NOW(),
   last_accessed   TIMESTAMPTZ DEFAULT NOW(),
   access_count    INT DEFAULT 0,
-  pinned          BOOLEAN DEFAULT FALSE  -- pinned memories are never demoted
+  pinned          BOOLEAN DEFAULT FALSE,  -- pinned memories are never demoted
+
+  -- Temporal consolidation (human memory analogy)
+  -- Temporal memories are evaluated after consolidation_days and either
+  -- converted to long-term memories or archived (forgotten)
+  consolidation_at     TIMESTAMPTZ,       -- when to evaluate (auto-set for temporal category)
+  consolidation_status VARCHAR(20) DEFAULT 'pending'
+                         CHECK (consolidation_status IN ('pending','consolidated','archived'))
 );
 
 -- ── Memory indexes ──────────────────────────────────────────
@@ -188,6 +195,10 @@ CREATE INDEX idx_memories_access ON memories (user_id, access_count DESC)
 -- Shared memories — cross-project access
 CREATE INDEX idx_memories_shared ON memories (user_id, category, importance DESC)
   WHERE is_shared = TRUE;
+
+-- Temporal consolidation job candidates
+CREATE INDEX idx_memories_consolidation ON memories (consolidation_at)
+  WHERE category = 'temporal' AND consolidation_status = 'pending';
 
 -- Note: IVFFlat vector index — create AFTER loading initial data for best performance
 -- CREATE INDEX idx_memories_vector ON memories
@@ -255,6 +266,26 @@ CREATE TABLE context_bundles (
 );
 
 -- ──────────────────────────────────────────
+-- AUDIT LOG
+-- Tracks access to sensitive memories (credentials category)
+-- ──────────────────────────────────────────
+CREATE TABLE audit_log (
+  id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id     UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  memory_id   UUID REFERENCES memories(id) ON DELETE SET NULL,
+  operation   VARCHAR(20) NOT NULL CHECK (operation IN ('read','write','delete','decrypt')),
+  category    VARCHAR(50),
+  content_preview TEXT,  -- first 60 chars of decrypted content
+  ip_address  INET,
+  user_agent  TEXT,
+  created_at  TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_audit_user ON audit_log (user_id, created_at DESC);
+CREATE INDEX idx_audit_memory ON audit_log (memory_id) WHERE memory_id IS NOT NULL;
+CREATE INDEX idx_audit_operation ON audit_log (operation, created_at DESC);
+
+-- ──────────────────────────────────────────
 -- DISTILLATION JOBS
 -- ──────────────────────────────────────────
 CREATE TABLE distillation_jobs (
@@ -286,6 +317,32 @@ CREATE TRIGGER trg_users_updated     BEFORE UPDATE ON users     FOR EACH ROW EXE
 CREATE TRIGGER trg_projects_updated  BEFORE UPDATE ON projects  FOR EACH ROW EXECUTE FUNCTION update_updated_at();
 CREATE TRIGGER trg_memories_updated  BEFORE UPDATE ON memories  FOR EACH ROW EXECUTE FUNCTION update_updated_at();
 CREATE TRIGGER trg_entities_updated  BEFORE UPDATE ON entities  FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+-- ──────────────────────────────────────────
+-- TRIGGER: Auto-set consolidation_at for temporal memories
+-- Temporal memories are scheduled for consolidation 7 days after creation
+-- (configurable via metadata->>'consolidation_days')
+-- ──────────────────────────────────────────
+CREATE OR REPLACE FUNCTION set_temporal_consolidation()
+RETURNS TRIGGER AS $$
+DECLARE
+  days INT;
+BEGIN
+  IF NEW.category = 'temporal' AND NEW.consolidation_at IS NULL THEN
+    days := COALESCE(
+      (NEW.metadata->>'consolidation_days')::INT,
+      7
+    );
+    NEW.consolidation_at := NEW.created_at + (days || ' days')::INTERVAL;
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_memories_temporal_consolidation
+  BEFORE INSERT ON memories
+  FOR EACH ROW
+  EXECUTE FUNCTION set_temporal_consolidation();
 
 -- ──────────────────────────────────────────
 -- TRIGGER: Auto-promote warm → hot
@@ -466,6 +523,48 @@ BEGIN
     AND (p_types IS NULL OR m.type = ANY(p_types))
     AND (p_categories IS NULL OR m.category = ANY(p_categories))
   ORDER BY combined_score DESC
+  LIMIT p_limit;
+END;
+$$ LANGUAGE plpgsql;
+
+-- ──────────────────────────────────────────
+-- FUNCTION: find_duplicate_memories
+-- Returns pairs of memories with cosine similarity above threshold.
+-- Used by the deduplication worker to merge near-identical memories.
+-- ──────────────────────────────────────────
+CREATE OR REPLACE FUNCTION find_duplicate_memories(
+  p_user_id   UUID,
+  p_threshold FLOAT DEFAULT 0.95,
+  p_limit     INT DEFAULT 50
+)
+RETURNS TABLE (
+  id_a        UUID,
+  id_b        UUID,
+  content_a   TEXT,
+  content_b   TEXT,
+  similarity  FLOAT,
+  category_a  VARCHAR,
+  category_b  VARCHAR
+) AS $$
+BEGIN
+  RETURN QUERY
+  SELECT
+    a.id,
+    b.id,
+    a.content,
+    b.content,
+    (1 - (a.embedding <=> b.embedding))::FLOAT AS similarity,
+    a.category,
+    b.category
+  FROM memories a
+  JOIN memories b ON b.user_id = a.user_id AND b.id > a.id
+  WHERE
+    a.user_id = p_user_id
+    AND a.embedding IS NOT NULL
+    AND b.embedding IS NOT NULL
+    AND a.tier != 'cold' AND b.tier != 'cold'
+    AND (1 - (a.embedding <=> b.embedding)) >= p_threshold
+  ORDER BY similarity DESC
   LIMIT p_limit;
 END;
 $$ LANGUAGE plpgsql;
