@@ -1,9 +1,15 @@
 import { query, withTransaction } from '../db/pool.js';
 import { embeddingService } from './embedding.service.js';
+import { contextBundleService } from './context-bundle.service.js';
 import type {
-  Memory, MemorySearchResult, CreateMemoryDto, UpdateMemoryDto,
-  SearchMemoriesDto, PaginationQuery, MemoryType,
+  Memory, MemorySearchResult, CoreMemory,
+  CreateMemoryDto, UpdateMemoryDto, SearchMemoriesDto,
+  PaginationQuery, MemoryType, MemoryTier, MemoryCategory,
 } from '@memoryai/shared';
+
+const MEMORY_COLS = `id, user_id, project_id, session_id, tier, category, type, content,
+  importance, tags, language, pinned, metadata,
+  created_at, updated_at, last_accessed, access_count`;
 
 export const memoryService = {
   async create(userId: string, dto: CreateMemoryDto): Promise<Memory> {
@@ -11,22 +17,33 @@ export const memoryService = {
     const vectorLiteral = embeddingService.toVectorLiteral(embedding);
 
     const res = await query<Memory>(
-      `INSERT INTO memories (user_id, project_id, session_id, type, content, importance, tags, metadata, embedding)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::vector)
-       RETURNING id, user_id, project_id, session_id, type, content, importance, tags, metadata,
-                 created_at, updated_at, last_accessed, access_count`,
+      `INSERT INTO memories
+         (user_id, project_id, session_id, tier, category, type, content,
+          importance, tags, language, pinned, metadata, embedding)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::vector)
+       RETURNING ${MEMORY_COLS}`,
       [
         userId,
         dto.project_id ?? null,
         dto.session_id ?? null,
+        dto.tier ?? 'warm',
+        dto.category ?? 'general',
         dto.type ?? 'fact',
         dto.content,
         dto.importance ?? 0.5,
         dto.tags ?? [],
+        dto.language ?? 'auto',
+        dto.pinned ?? false,
         JSON.stringify(dto.metadata ?? {}),
         vectorLiteral,
       ]
     );
+
+    // Invalidate Redis cache if tier affects bundle
+    if (res.rows[0].tier === 'core' || res.rows[0].tier === 'hot') {
+      contextBundleService.invalidate(userId).catch(() => {});
+    }
+
     return res.rows[0];
   },
 
@@ -34,42 +51,70 @@ export const memoryService = {
     if (items.length === 0) return [];
 
     const embeddings = await embeddingService.embedBatch(items.map(i => i.content));
+    let invalidateBundle = false;
 
-    return withTransaction(async (client) => {
-      const memories: Memory[] = [];
+    const memories = await withTransaction(async (client) => {
+      const result: Memory[] = [];
       for (let i = 0; i < items.length; i++) {
         const dto = items[i];
         const vectorLiteral = embeddingService.toVectorLiteral(embeddings[i]);
         const res = await client.query<Memory>(
-          `INSERT INTO memories (user_id, project_id, session_id, type, content, importance, tags, metadata, embedding)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::vector)
-           RETURNING id, user_id, project_id, session_id, type, content, importance, tags, metadata,
-                     created_at, updated_at, last_accessed, access_count`,
+          `INSERT INTO memories
+             (user_id, project_id, session_id, tier, category, type, content,
+              importance, tags, language, pinned, metadata, embedding)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::vector)
+           RETURNING ${MEMORY_COLS}`,
           [
             userId,
             dto.project_id ?? null,
             dto.session_id ?? null,
+            dto.tier ?? 'warm',
+            dto.category ?? 'general',
             dto.type ?? 'fact',
             dto.content,
             dto.importance ?? 0.5,
             dto.tags ?? [],
+            dto.language ?? 'auto',
+            dto.pinned ?? false,
             JSON.stringify(dto.metadata ?? {}),
             vectorLiteral,
           ]
         );
-        memories.push(res.rows[0]);
+        result.push(res.rows[0]);
+        if (res.rows[0].tier === 'core' || res.rows[0].tier === 'hot') {
+          invalidateBundle = true;
+        }
       }
-      return memories;
+      return result;
     });
+
+    if (invalidateBundle) {
+      contextBundleService.invalidate(userId).catch(() => {});
+    }
+
+    return memories;
   },
 
+  /**
+   * Phase 2 semantic search — hot+warm tiers only.
+   * Core tier is loaded separately via getCoreContext / contextBundleService.
+   * Uses search_memories_v2 with tier boost + recency weighting.
+   */
   async search(userId: string, dto: SearchMemoriesDto): Promise<MemorySearchResult[]> {
     const limit = Math.min(dto.limit ?? 10, 20);
     const embedding = await embeddingService.embed(dto.query);
     const vectorLiteral = embeddingService.toVectorLiteral(embedding);
 
-    const res = await query<MemorySearchResult>(
-      `SELECT * FROM search_memories($1, $2::vector, $3, $4, $5, $6, $7)`,
+    const res = await query<MemorySearchResult & {
+      tier: MemoryTier; category: MemoryCategory; recency_score: number;
+    }>(
+      `SELECT
+         id, content, type, tier, category, importance, tags, language, pinned,
+         metadata, created_at, session_id,
+         '' AS user_id, NULL AS project_id, NULL AS updated_at, 0 AS access_count,
+         NOW() AS last_accessed,
+         vector_score, text_score, recency_score, combined_score
+       FROM search_memories_v2($1, $2::vector, $3, $4, $5, $6, $7, $8, $9)`,
       [
         userId,
         vectorLiteral,
@@ -77,35 +122,53 @@ export const memoryService = {
         limit,
         dto.project_id ?? null,
         dto.types && dto.types.length > 0 ? dto.types : null,
+        dto.categories && dto.categories.length > 0 ? dto.categories : null,
         dto.min_importance ?? 0.0,
+        dto.include_cold ?? false,
       ]
     );
 
-    // Update access stats async (fire & forget, non-blocking)
-    if (res.rows.length > 0) {
-      const ids = res.rows.map(r => r.id);
+    // Restore user_id (excluded from function for performance)
+    const results = res.rows.map(r => ({ ...r, user_id: userId }));
+
+    // Update access stats async (triggers auto-promotion to hot tier)
+    if (results.length > 0) {
+      const ids = results.map(r => r.id);
       query('SELECT touch_memories($1)', [ids]).catch((err: Error) => {
         process.stderr.write(`[memory] touch_memories failed: ${err.message}\n`);
       });
     }
 
+    return results;
+  },
+
+  /**
+   * Phase 1: instant core context retrieval — no vector needed.
+   * Uses partial index on tier='core', returns in <5ms.
+   */
+  async getCoreContext(userId: string, projectId?: string, limit = 15): Promise<CoreMemory[]> {
+    const res = await query<CoreMemory>(
+      `SELECT id, content, type, category, importance, tags, metadata, created_at
+       FROM get_core_context($1, $2, $3)`,
+      [userId, projectId ?? null, limit]
+    );
     return res.rows;
   },
 
   async findById(userId: string, id: string): Promise<Memory | null> {
     const res = await query<Memory>(
-      `SELECT id, user_id, project_id, session_id, type, content, importance, tags, metadata,
-              created_at, updated_at, last_accessed, access_count
-       FROM memories WHERE id = $1 AND user_id = $2`,
+      `SELECT ${MEMORY_COLS} FROM memories WHERE id = $1 AND user_id = $2`,
       [id, userId]
     );
     return res.rows[0] ?? null;
   },
 
-  async list(userId: string, pagination: PaginationQuery & { project_id?: string; type?: MemoryType }): Promise<{
-    data: Memory[];
-    total: number;
-  }> {
+  async list(userId: string, pagination: PaginationQuery & {
+    project_id?: string;
+    type?: MemoryType;
+    tier?: MemoryTier;
+    category?: MemoryCategory;
+  }): Promise<{ data: Memory[]; total: number }> {
     const limit = Math.min(pagination.limit ?? 20, 100);
     const offset = pagination.offset ?? 0;
 
@@ -113,23 +176,18 @@ export const memoryService = {
     const params: unknown[] = [userId];
     let paramIdx = 2;
 
-    if (pagination.project_id) {
-      conditions.push(`project_id = $${paramIdx++}`);
-      params.push(pagination.project_id);
-    }
-    if (pagination.type) {
-      conditions.push(`type = $${paramIdx++}`);
-      params.push(pagination.type);
-    }
+    if (pagination.project_id) { conditions.push(`project_id = $${paramIdx++}`); params.push(pagination.project_id); }
+    if (pagination.type) { conditions.push(`type = $${paramIdx++}`); params.push(pagination.type); }
+    if (pagination.tier) { conditions.push(`tier = $${paramIdx++}`); params.push(pagination.tier); }
+    if (pagination.category) { conditions.push(`category = $${paramIdx++}`); params.push(pagination.category); }
 
     const where = conditions.join(' AND ');
 
     const [dataRes, countRes] = await Promise.all([
       query<Memory>(
-        `SELECT id, user_id, project_id, session_id, type, content, importance, tags, metadata,
-                created_at, updated_at, last_accessed, access_count
-         FROM memories WHERE ${where}
-         ORDER BY created_at DESC
+        `SELECT ${MEMORY_COLS} FROM memories
+         WHERE ${where}
+         ORDER BY tier = 'core' DESC, importance DESC, created_at DESC
          LIMIT $${paramIdx} OFFSET $${paramIdx + 1}`,
         [...params, limit, offset]
       ),
@@ -157,40 +215,103 @@ export const memoryService = {
       params.push(dto.content, vectorLiteral);
     }
     if (dto.type !== undefined) { sets.push(`type = $${idx++}`); params.push(dto.type); }
+    if (dto.tier !== undefined) { sets.push(`tier = $${idx++}`); params.push(dto.tier); }
+    if (dto.category !== undefined) { sets.push(`category = $${idx++}`); params.push(dto.category); }
     if (dto.importance !== undefined) { sets.push(`importance = $${idx++}`); params.push(dto.importance); }
     if (dto.tags !== undefined) { sets.push(`tags = $${idx++}`); params.push(dto.tags); }
+    if (dto.pinned !== undefined) { sets.push(`pinned = $${idx++}`); params.push(dto.pinned); }
     if (dto.metadata !== undefined) { sets.push(`metadata = $${idx++}`); params.push(JSON.stringify(dto.metadata)); }
 
     if (sets.length === 0) return this.findById(userId, id);
 
     params.push(id, userId);
     const res = await query<Memory>(
-      `UPDATE memories SET ${sets.join(', ')} WHERE id = $${idx++} AND user_id = $${idx}
-       RETURNING id, user_id, project_id, session_id, type, content, importance, tags, metadata,
-                 created_at, updated_at, last_accessed, access_count`,
+      `UPDATE memories SET ${sets.join(', ')}
+       WHERE id = $${idx++} AND user_id = $${idx}
+       RETURNING ${MEMORY_COLS}`,
       params
     );
+
+    if (res.rows[0]) {
+      contextBundleService.invalidate(userId).catch(() => {});
+    }
+
     return res.rows[0] ?? null;
   },
 
   async delete(userId: string, id: string): Promise<boolean> {
-    const res = await query(
-      'DELETE FROM memories WHERE id = $1 AND user_id = $2',
-      [id, userId]
-    );
-    return (res.rowCount ?? 0) > 0;
+    // Get tier before delete to know if we need to invalidate bundle
+    const mem = await this.findById(userId, id);
+    const res = await query('DELETE FROM memories WHERE id = $1 AND user_id = $2', [id, userId]);
+    const deleted = (res.rowCount ?? 0) > 0;
+
+    if (deleted && mem && (mem.tier === 'core' || mem.tier === 'hot')) {
+      contextBundleService.invalidate(userId).catch(() => {});
+    }
+
+    return deleted;
   },
 
-  async getRecentContext(userId: string, projectId?: string, limit = 5): Promise<Memory[]> {
-    const res = await query<Memory>(
-      `SELECT id, user_id, project_id, session_id, type, content, importance, tags, metadata,
-              created_at, updated_at, last_accessed, access_count
-       FROM memories
-       WHERE user_id = $1 AND ($2::uuid IS NULL OR project_id = $2)
-       ORDER BY importance DESC, created_at DESC
-       LIMIT $3`,
-      [userId, projectId ?? null, limit]
+  async addLink(
+    userId: string,
+    sourceId: string,
+    target: { memoryId?: string; entityId?: string },
+    linkType: string
+  ): Promise<void> {
+    // Verify source belongs to user
+    const source = await this.findById(userId, sourceId);
+    if (!source) throw Object.assign(new Error('Source memory not found'), { statusCode: 404 });
+
+    await query(
+      `INSERT INTO memory_links (source_id, target_memory_id, target_entity_id, link_type)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT DO NOTHING`,
+      [sourceId, target.memoryId ?? null, target.entityId ?? null, linkType]
     );
-    return res.rows;
+  },
+
+  async getLinks(userId: string, memoryId: string): Promise<Array<{
+    id: string;
+    link_type: string;
+    target_memory?: { id: string; content: string; type: string };
+    target_entity?: { name: string; type: string };
+  }>> {
+    const res = await query<{
+      id: string;
+      link_type: string;
+      target_memory_id: string | null;
+      target_entity_id: string | null;
+      target_memory_content: string | null;
+      target_memory_type: string | null;
+      target_entity_name: string | null;
+      target_entity_type: string | null;
+    }>(
+      `SELECT
+         ml.id, ml.link_type,
+         ml.target_memory_id,  ml.target_entity_id,
+         tm.content AS target_memory_content, tm.type AS target_memory_type,
+         te.name AS target_entity_name, te.type AS target_entity_type
+       FROM memory_links ml
+       JOIN memories src ON src.id = ml.source_id AND src.user_id = $1
+       LEFT JOIN memories tm ON tm.id = ml.target_memory_id
+       LEFT JOIN entities te ON te.id = ml.target_entity_id
+       WHERE ml.source_id = $2`,
+      [userId, memoryId]
+    );
+
+    return res.rows.map(r => ({
+      id: r.id,
+      link_type: r.link_type,
+      ...(r.target_memory_id ? {
+        target_memory: { id: r.target_memory_id, content: r.target_memory_content!, type: r.target_memory_type! },
+      } : {}),
+      ...(r.target_entity_id ? {
+        target_entity: { name: r.target_entity_name!, type: r.target_entity_type! },
+      } : {}),
+    }));
+  },
+
+  async getStats(userId: string) {
+    return contextBundleService.getStats(userId);
   },
 };

@@ -1,9 +1,37 @@
--- MemoryAI Database Schema
+-- MemoryAI — Complete Database Schema
 -- PostgreSQL 16 + pgvector
+-- Optimized for fast LLM context retrieval with 2-phase loading:
+--   Phase 1 (instant):  tier='core' — always loaded, no vector needed, Redis-cached
+--   Phase 2 (semantic): tier='hot'+'warm' — vector+text+recency search
+--   Archived:           tier='cold' — searchable but excluded from default results
 
 CREATE EXTENSION IF NOT EXISTS vector;
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
+
+-- ──────────────────────────────────────────
+-- TAXONOMY REFERENCE
+-- ──────────────────────────────────────────
+-- Memory tiers (retrieval priority):
+--   core  → always loaded into every session (user profile, meta instructions, key preferences)
+--   hot   → high priority search results (recent decisions, active project, frequent access)
+--   warm  → standard semantic search (general facts, older context) [DEFAULT]
+--   cold  → archival — searchable but excluded from get_context results
+--
+-- Memory categories:
+--   user_profile      → Who the user is, role, skills, contact
+--   meta_instructions → Instructions TO the AI: how to behave, format, language
+--   active_project    → Currently worked-on project — goals, status, stack
+--   technical_stack   → Technologies, frameworks, databases, patterns in use
+--   preferences       → Work habits, style, format preferences
+--   workflow          → Recurring processes, routines, rituals
+--   domain_knowledge  → Industry/domain facts, glossary, standards
+--   decisions         → Past decisions with rationale
+--   constraints       → Deadlines, budgets, team size, limitations
+--   relationships     → People, companies, org structure
+--   temporal          → Time-sensitive context (events, meetings, deadlines)
+--   archive           → Superseded or historical info
+--   general           → Uncategorized [DEFAULT]
 
 -- ──────────────────────────────────────────
 -- USERS
@@ -22,7 +50,7 @@ CREATE TABLE users (
 CREATE INDEX idx_users_api_key ON users (api_key);
 
 -- ──────────────────────────────────────────
--- PROJECTS  (optional namespace for memories)
+-- PROJECTS
 -- ──────────────────────────────────────────
 CREATE TABLE projects (
   id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -38,7 +66,7 @@ CREATE TABLE projects (
 CREATE INDEX idx_projects_user ON projects (user_id);
 
 -- ──────────────────────────────────────────
--- SESSIONS  (conversation tracking)
+-- SESSIONS
 -- ──────────────────────────────────────────
 CREATE TABLE sessions (
   id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -59,7 +87,7 @@ CREATE INDEX idx_sessions_project ON sessions (project_id);
 CREATE INDEX idx_sessions_status  ON sessions (status);
 
 -- ──────────────────────────────────────────
--- SESSION MESSAGES  (raw conversation buffer)
+-- SESSION MESSAGES
 -- ──────────────────────────────────────────
 CREATE TABLE session_messages (
   id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -73,38 +101,87 @@ CREATE TABLE session_messages (
 CREATE INDEX idx_messages_session ON session_messages (session_id, created_at ASC);
 
 -- ──────────────────────────────────────────
--- MEMORIES  (long-term persistent facts)
+-- MEMORIES
+-- Core table — optimized for 2-phase retrieval
 -- ──────────────────────────────────────────
 CREATE TABLE memories (
   id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id         UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   project_id      UUID REFERENCES projects(id) ON DELETE SET NULL,
   session_id      UUID REFERENCES sessions(id) ON DELETE SET NULL,
+
+  -- Retrieval taxonomy
+  tier            VARCHAR(10) DEFAULT 'warm'
+                    CHECK (tier IN ('core','hot','warm','cold')),
+  category        VARCHAR(50) DEFAULT 'general'
+                    CHECK (category IN (
+                      'user_profile','meta_instructions','active_project',
+                      'technical_stack','preferences','workflow',
+                      'domain_knowledge','decisions','constraints',
+                      'relationships','temporal','archive','general'
+                    )),
+
+  -- Memory content
   type            VARCHAR(50) NOT NULL DEFAULT 'fact'
                     CHECK (type IN ('fact','decision','preference','instruction','entity_relation','summary')),
   content         TEXT NOT NULL,
   importance      FLOAT DEFAULT 0.5 CHECK (importance >= 0 AND importance <= 1),
-  embedding       vector(768),
+
+  -- Semantic search
+  embedding       vector(768),  -- dimension must match EMBED_DIMENSIONS in .env
+
+  -- Metadata
   tags            TEXT[] DEFAULT '{}',
+  language        VARCHAR(10) DEFAULT 'auto',  -- 'pl', 'en', 'auto'
   metadata        JSONB DEFAULT '{}',
+
+  -- Access tracking (used for auto-promotion to 'hot' tier)
   created_at      TIMESTAMPTZ DEFAULT NOW(),
   updated_at      TIMESTAMPTZ DEFAULT NOW(),
   last_accessed   TIMESTAMPTZ DEFAULT NOW(),
-  access_count    INT DEFAULT 0
+  access_count    INT DEFAULT 0,
+  pinned          BOOLEAN DEFAULT FALSE  -- pinned memories are never demoted
 );
 
+-- ── Memory indexes ──────────────────────────────────────────
+
+-- Primary lookup
 CREATE INDEX idx_memories_user       ON memories (user_id, created_at DESC);
 CREATE INDEX idx_memories_project    ON memories (project_id);
-CREATE INDEX idx_memories_type       ON memories (user_id, type);
-CREATE INDEX idx_memories_tags       ON memories USING GIN (tags);
+
+-- Tier-based retrieval (partial indexes — very fast)
+CREATE INDEX idx_memories_core ON memories (user_id, importance DESC, last_accessed DESC)
+  WHERE tier = 'core';
+
+CREATE INDEX idx_memories_hot ON memories (user_id, importance DESC, created_at DESC)
+  WHERE tier = 'hot';
+
+-- Category-filtered queries
+CREATE INDEX idx_memories_category ON memories (user_id, category, importance DESC);
+
+-- Tier + category combined
+CREATE INDEX idx_memories_tier_cat ON memories (user_id, tier, category);
+
+-- Full-text search
 CREATE INDEX idx_memories_content_fts ON memories USING GIN (to_tsvector('simple', content));
 
--- Vector similarity index (IVFFlat — good for up to ~1M rows)
--- Created after first data load for best performance:
--- CREATE INDEX idx_memories_vector ON memories USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
+-- Tag search
+CREATE INDEX idx_memories_tags ON memories USING GIN (tags);
+
+-- Recency queries (for stale session checks)
+CREATE INDEX idx_memories_recent ON memories (user_id, created_at DESC)
+  WHERE tier IN ('hot', 'warm');
+
+-- Access count (for auto-promotion queries)
+CREATE INDEX idx_memories_access ON memories (user_id, access_count DESC)
+  WHERE tier = 'warm';
+
+-- Note: IVFFlat vector index — create AFTER loading initial data for best performance
+-- CREATE INDEX idx_memories_vector ON memories
+--   USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
 
 -- ──────────────────────────────────────────
--- ENTITIES  (people, projects, companies, tools)
+-- ENTITIES
 -- ──────────────────────────────────────────
 CREATE TABLE entities (
   id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -115,6 +192,7 @@ CREATE TABLE entities (
   aliases     TEXT[] DEFAULT '{}',
   facts       JSONB DEFAULT '[]',
   embedding   vector(768),
+  pinned      BOOLEAN DEFAULT FALSE,
   metadata    JSONB DEFAULT '{}',
   created_at  TIMESTAMPTZ DEFAULT NOW(),
   updated_at  TIMESTAMPTZ DEFAULT NOW(),
@@ -123,27 +201,65 @@ CREATE TABLE entities (
 
 CREATE INDEX idx_entities_user    ON entities (user_id);
 CREATE INDEX idx_entities_type    ON entities (user_id, type);
+CREATE INDEX idx_entities_pinned  ON entities (user_id) WHERE pinned = TRUE;
 CREATE INDEX idx_entities_name    ON entities USING GIN (to_tsvector('simple', name));
 CREATE INDEX idx_entities_aliases ON entities USING GIN (aliases);
 
 -- ──────────────────────────────────────────
--- DISTILLATION JOBS  (async background queue log)
+-- MEMORY LINKS  (relationship graph)
+-- Directed edges between memories and/or entities
+-- ──────────────────────────────────────────
+CREATE TABLE memory_links (
+  id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  source_id         UUID NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
+  target_memory_id  UUID REFERENCES memories(id) ON DELETE CASCADE,
+  target_entity_id  UUID REFERENCES entities(id) ON DELETE CASCADE,
+  link_type         VARCHAR(30) NOT NULL
+                      CHECK (link_type IN ('references','supersedes','elaborates','contradicts','relates_to')),
+  created_at        TIMESTAMPTZ DEFAULT NOW(),
+  -- Exactly one target must be set
+  CONSTRAINT chk_link_target CHECK (
+    (target_memory_id IS NOT NULL)::int + (target_entity_id IS NOT NULL)::int = 1
+  )
+);
+
+CREATE INDEX idx_memory_links_source ON memory_links (source_id);
+CREATE INDEX idx_memory_links_target_memory ON memory_links (target_memory_id);
+CREATE INDEX idx_memory_links_target_entity ON memory_links (target_entity_id);
+
+-- ──────────────────────────────────────────
+-- CONTEXT BUNDLES  (pre-computed fast-load snapshots)
+-- One per user — rebuilt on core/hot memory changes
+-- Cached in Redis by context-bundle.service.ts
+-- ──────────────────────────────────────────
+CREATE TABLE context_bundles (
+  user_id        UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  core_memories  JSONB DEFAULT '[]',  -- pre-serialized core tier memories
+  key_entities   JSONB DEFAULT '[]',  -- pinned + most recently updated entities
+  hot_summary    TEXT DEFAULT '',     -- brief text summary of hot tier themes
+  built_at       TIMESTAMPTZ DEFAULT NOW(),
+  is_stale       BOOLEAN DEFAULT TRUE  -- true until first build
+);
+
+-- ──────────────────────────────────────────
+-- DISTILLATION JOBS
 -- ──────────────────────────────────────────
 CREATE TABLE distillation_jobs (
-  id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  session_id   UUID NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-  user_id      UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  status       VARCHAR(20) DEFAULT 'pending' CHECK (status IN ('pending','running','done','failed')),
+  id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  session_id       UUID NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  user_id          UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  status           VARCHAR(20) DEFAULT 'pending'
+                     CHECK (status IN ('pending','running','done','failed')),
   memories_created INT DEFAULT 0,
-  error        TEXT,
-  started_at   TIMESTAMPTZ,
-  finished_at  TIMESTAMPTZ,
-  created_at   TIMESTAMPTZ DEFAULT NOW(),
+  error            TEXT,
+  started_at       TIMESTAMPTZ,
+  finished_at      TIMESTAMPTZ,
+  created_at       TIMESTAMPTZ DEFAULT NOW(),
   UNIQUE (session_id)
 );
 
 -- ──────────────────────────────────────────
--- AUTO-UPDATE updated_at TRIGGERS
+-- TRIGGERS: updated_at
 -- ──────────────────────────────────────────
 CREATE OR REPLACE FUNCTION update_updated_at()
 RETURNS TRIGGER AS $$
@@ -159,17 +275,165 @@ CREATE TRIGGER trg_memories_updated  BEFORE UPDATE ON memories  FOR EACH ROW EXE
 CREATE TRIGGER trg_entities_updated  BEFORE UPDATE ON entities  FOR EACH ROW EXECUTE FUNCTION update_updated_at();
 
 -- ──────────────────────────────────────────
--- HELPER FUNCTIONS
+-- TRIGGER: Auto-promote warm → hot
+-- When a warm memory is accessed 5+ times, it gets promoted to hot
 -- ──────────────────────────────────────────
+CREATE OR REPLACE FUNCTION auto_promote_memory_tier()
+RETURNS TRIGGER AS $$
+BEGIN
+  IF NEW.access_count >= 5 AND NEW.tier = 'warm' AND NOT NEW.pinned THEN
+    NEW.tier := 'hot';
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
 
--- Hybrid search: vector similarity + full-text
+CREATE TRIGGER trg_memories_auto_promote
+  BEFORE UPDATE OF access_count ON memories
+  FOR EACH ROW
+  EXECUTE FUNCTION auto_promote_memory_tier();
+
+-- ──────────────────────────────────────────
+-- TRIGGER: Invalidate context bundle when core/hot memories change
+-- ──────────────────────────────────────────
+CREATE OR REPLACE FUNCTION invalidate_context_bundle()
+RETURNS TRIGGER AS $$
+BEGIN
+  IF TG_OP IN ('INSERT', 'UPDATE') THEN
+    IF NEW.tier IN ('core', 'hot') THEN
+      INSERT INTO context_bundles (user_id, is_stale)
+      VALUES (NEW.user_id, TRUE)
+      ON CONFLICT (user_id) DO UPDATE SET is_stale = TRUE;
+    END IF;
+    RETURN NEW;
+  ELSIF TG_OP = 'DELETE' THEN
+    IF OLD.tier IN ('core', 'hot') THEN
+      UPDATE context_bundles SET is_stale = TRUE WHERE user_id = OLD.user_id;
+    END IF;
+    RETURN OLD;
+  END IF;
+  RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_memories_invalidate_bundle
+  AFTER INSERT OR UPDATE OR DELETE ON memories
+  FOR EACH ROW
+  EXECUTE FUNCTION invalidate_context_bundle();
+
+-- ──────────────────────────────────────────
+-- FUNCTION: get_core_context
+-- Phase 1 retrieval — no vector needed, sub-millisecond via partial index
+-- ──────────────────────────────────────────
+CREATE OR REPLACE FUNCTION get_core_context(
+  p_user_id    UUID,
+  p_project_id UUID DEFAULT NULL,
+  p_limit      INT DEFAULT 15
+)
+RETURNS TABLE (
+  id UUID, content TEXT, type VARCHAR, category VARCHAR,
+  importance FLOAT, tags TEXT[], metadata JSONB, created_at TIMESTAMPTZ
+) AS $$
+BEGIN
+  RETURN QUERY
+  SELECT
+    m.id, m.content, m.type, m.category,
+    m.importance, m.tags, m.metadata, m.created_at
+  FROM memories m
+  WHERE
+    m.user_id = p_user_id
+    AND m.tier = 'core'
+    AND (
+      p_project_id IS NULL
+      OR m.project_id = p_project_id
+      OR m.project_id IS NULL   -- global core memories (no project scope)
+    )
+  ORDER BY m.importance DESC, m.last_accessed DESC
+  LIMIT p_limit;
+END;
+$$ LANGUAGE plpgsql;
+
+-- ──────────────────────────────────────────
+-- FUNCTION: search_memories_v2
+-- Phase 2 retrieval — tier-aware hybrid search with recency weighting
+-- Excludes core tier (loaded in phase 1) and cold tier (archival)
+--
+-- Score formula (weights sum to 1.0):
+--   0.55 × vector_similarity    — semantic match
+--   0.15 × text_rank            — keyword match
+--   0.10 × importance           — user-set priority
+--   0.12 × tier_boost           — hot=+0.20, warm=0, (core/cold excluded)
+--   0.08 × recency_score        — 1.0 today → ~0.37 at 6mo → ~0.14 at 1yr
+-- ──────────────────────────────────────────
+CREATE OR REPLACE FUNCTION search_memories_v2(
+  p_user_id        UUID,
+  p_embedding      vector(768),
+  p_query          TEXT,
+  p_limit          INT DEFAULT 10,
+  p_project_id     UUID DEFAULT NULL,
+  p_types          TEXT[] DEFAULT NULL,
+  p_categories     TEXT[] DEFAULT NULL,
+  p_min_importance FLOAT DEFAULT 0.0,
+  p_include_cold   BOOLEAN DEFAULT FALSE
+)
+RETURNS TABLE (
+  id UUID, content TEXT, type VARCHAR, tier VARCHAR, category VARCHAR,
+  importance FLOAT, tags TEXT[], metadata JSONB,
+  created_at TIMESTAMPTZ, session_id UUID,
+  vector_score FLOAT, text_score FLOAT, recency_score FLOAT, combined_score FLOAT
+) AS $$
+BEGIN
+  RETURN QUERY
+  SELECT
+    m.id, m.content, m.type, m.tier, m.category,
+    m.importance, m.tags, m.metadata, m.created_at, m.session_id,
+
+    (1 - (m.embedding <=> p_embedding))::FLOAT AS vector_score,
+
+    ts_rank(
+      to_tsvector('simple', m.content),
+      plainto_tsquery('simple', p_query)
+    )::FLOAT AS text_score,
+
+    EXP(
+      -EXTRACT(epoch FROM (NOW() - m.created_at)) / 15552000.0
+    )::FLOAT AS recency_score,
+
+    (
+      0.55 * (1 - (m.embedding <=> p_embedding))
+      + 0.15 * ts_rank(to_tsvector('simple', m.content), plainto_tsquery('simple', p_query))
+      + 0.10 * m.importance
+      + 0.12 * CASE m.tier
+                 WHEN 'hot'  THEN 0.20
+                 WHEN 'warm' THEN 0.00
+                 ELSE 0.00
+               END
+      + 0.08 * EXP(-EXTRACT(epoch FROM (NOW() - m.created_at)) / 15552000.0)
+    )::FLOAT AS combined_score
+
+  FROM memories m
+  WHERE
+    m.user_id = p_user_id
+    AND m.embedding IS NOT NULL
+    AND m.tier != 'core'   -- core loaded separately in phase 1
+    AND (p_include_cold OR m.tier != 'cold')
+    AND m.importance >= p_min_importance
+    AND (p_project_id IS NULL OR m.project_id = p_project_id)
+    AND (p_types IS NULL OR m.type = ANY(p_types))
+    AND (p_categories IS NULL OR m.category = ANY(p_categories))
+  ORDER BY combined_score DESC
+  LIMIT p_limit;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Keep v1 for backward compatibility
 CREATE OR REPLACE FUNCTION search_memories(
-  p_user_id     UUID,
-  p_embedding   vector(768),
-  p_query       TEXT,
-  p_limit       INT DEFAULT 10,
-  p_project_id  UUID DEFAULT NULL,
-  p_types       TEXT[] DEFAULT NULL,
+  p_user_id        UUID,
+  p_embedding      vector(768),
+  p_query          TEXT,
+  p_limit          INT DEFAULT 10,
+  p_project_id     UUID DEFAULT NULL,
+  p_types          TEXT[] DEFAULT NULL,
   p_min_importance FLOAT DEFAULT 0.0
 )
 RETURNS TABLE (
@@ -180,33 +444,103 @@ RETURNS TABLE (
 BEGIN
   RETURN QUERY
   SELECT
-    m.id, m.content, m.type, m.importance, m.tags,
-    m.metadata, m.created_at, m.session_id,
-    (1 - (m.embedding <=> p_embedding))::FLOAT AS vector_score,
-    ts_rank(to_tsvector('simple', m.content), plainto_tsquery('simple', p_query))::FLOAT AS text_score,
-    (
-      0.7 * (1 - (m.embedding <=> p_embedding)) +
-      0.2 * ts_rank(to_tsvector('simple', m.content), plainto_tsquery('simple', p_query)) +
-      0.1 * m.importance
-    )::FLOAT AS combined_score
-  FROM memories m
-  WHERE
-    m.user_id = p_user_id
-    AND m.embedding IS NOT NULL
-    AND m.importance >= p_min_importance
-    AND (p_project_id IS NULL OR m.project_id = p_project_id)
-    AND (p_types IS NULL OR m.type = ANY(p_types))
-  ORDER BY combined_score DESC
-  LIMIT p_limit;
+    r.id, r.content, r.type, r.importance, r.tags,
+    r.metadata, r.created_at, r.session_id,
+    r.vector_score, r.text_score, r.combined_score
+  FROM search_memories_v2(
+    p_user_id, p_embedding, p_query, p_limit,
+    p_project_id, p_types, NULL, p_min_importance, FALSE
+  ) r;
 END;
 $$ LANGUAGE plpgsql;
 
--- Update access stats when memory is retrieved
+-- ──────────────────────────────────────────
+-- FUNCTION: build_context_bundle
+-- Called by context-bundle.service.ts when bundle is stale
+-- Serializes core memories + pinned entities into JSONB
+-- ──────────────────────────────────────────
+CREATE OR REPLACE FUNCTION build_context_bundle(p_user_id UUID)
+RETURNS VOID AS $$
+DECLARE
+  v_core_memories JSONB;
+  v_key_entities  JSONB;
+BEGIN
+  -- Serialize core memories ordered by importance
+  SELECT COALESCE(jsonb_agg(
+    jsonb_build_object(
+      'id',          m.id,
+      'content',     m.content,
+      'type',        m.type,
+      'category',    m.category,
+      'importance',  m.importance,
+      'created_at',  m.created_at
+    ) ORDER BY m.importance DESC, m.last_accessed DESC
+  ), '[]'::jsonb)
+  INTO v_core_memories
+  FROM memories m
+  WHERE m.user_id = p_user_id AND m.tier = 'core'
+  LIMIT 15;
+
+  -- Serialize pinned + recently updated entities
+  SELECT COALESCE(jsonb_agg(
+    jsonb_build_object(
+      'name',  e.name,
+      'type',  e.type,
+      'facts', e.facts
+    ) ORDER BY e.pinned DESC, e.updated_at DESC
+  ), '[]'::jsonb)
+  INTO v_key_entities
+  FROM entities e
+  WHERE e.user_id = p_user_id
+  LIMIT 10;
+
+  INSERT INTO context_bundles (user_id, core_memories, key_entities, built_at, is_stale)
+  VALUES (p_user_id, v_core_memories, v_key_entities, NOW(), FALSE)
+  ON CONFLICT (user_id) DO UPDATE SET
+    core_memories = EXCLUDED.core_memories,
+    key_entities  = EXCLUDED.key_entities,
+    built_at      = NOW(),
+    is_stale      = FALSE;
+END;
+$$ LANGUAGE plpgsql;
+
+-- ──────────────────────────────────────────
+-- FUNCTION: touch_memories
+-- Update access stats after retrieval (called async)
+-- Also triggers auto-promotion check via trg_memories_auto_promote
+-- ──────────────────────────────────────────
 CREATE OR REPLACE FUNCTION touch_memories(p_ids UUID[])
 RETURNS VOID AS $$
 BEGIN
   UPDATE memories
-  SET last_accessed = NOW(), access_count = access_count + 1
+  SET
+    last_accessed = NOW(),
+    access_count  = access_count + 1
   WHERE id = ANY(p_ids);
+END;
+$$ LANGUAGE plpgsql;
+
+-- ──────────────────────────────────────────
+-- FUNCTION: get_memory_stats
+-- Returns per-tier and per-category counts for dashboard
+-- ──────────────────────────────────────────
+CREATE OR REPLACE FUNCTION get_memory_stats(p_user_id UUID)
+RETURNS TABLE (
+  tier      VARCHAR,
+  category  VARCHAR,
+  count     BIGINT,
+  avg_importance FLOAT
+) AS $$
+BEGIN
+  RETURN QUERY
+  SELECT
+    m.tier,
+    m.category,
+    COUNT(*)::BIGINT,
+    ROUND(AVG(m.importance)::NUMERIC, 2)::FLOAT
+  FROM memories m
+  WHERE m.user_id = p_user_id
+  GROUP BY m.tier, m.category
+  ORDER BY m.tier, m.category;
 END;
 $$ LANGUAGE plpgsql;

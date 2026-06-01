@@ -13,7 +13,8 @@ import { memoryService } from '../services/memory.service.js';
 import { entityService } from '../services/entity.service.js';
 import { sessionService } from '../services/session.service.js';
 import { authService } from '../services/auth.service.js';
-import type { McpMemoryContext, MemoryType } from '@memoryai/shared';
+import { contextBundleService } from '../services/context-bundle.service.js';
+import type { MemoryType, MemoryCategory } from '@memoryai/shared';
 
 // ── MCP Protocol Types ──────────────────────────────────────
 
@@ -47,16 +48,17 @@ const TOOLS: McpTool[] = [
   {
     name: 'memory_get_context',
     description: `ALWAYS call this tool at the very beginning of every conversation, before your first response.
-Retrieves relevant memories and entity knowledge from previous sessions to provide you with persistent context.
-Returns facts, decisions, preferences, and important information from past interactions that are relevant to the current conversation topic.
-Use this context to provide continuity — the user should not need to re-explain what was already discussed.`,
+Uses 2-phase retrieval: Phase 1 loads core context instantly (user profile, instructions, key preferences — no vector needed).
+Phase 2 does semantic search for topic-specific memories from hot+warm tiers.
+Returns structured context with both always-relevant facts and topic-specific memories from past sessions.
+The user should never need to repeat what was already established.`,
     inputSchema: {
       type: 'object',
       properties: {
         topics: {
           type: 'array',
           items: { type: 'string' },
-          description: 'Key topics, questions, or keywords from the current conversation to search for relevant memories. Extract 3-5 main themes.',
+          description: 'Key topics, questions, or keywords from the current conversation. Extract 3-5 main themes for Phase 2 semantic search.',
         },
         project_id: {
           type: 'string',
@@ -64,7 +66,12 @@ Use this context to provide continuity — the user should not need to re-explai
         },
         limit: {
           type: 'number',
-          description: 'Maximum number of memories to retrieve (default: 10, max: 20).',
+          description: 'Maximum topic-specific memories to retrieve in Phase 2 (default: 10, max: 20). Core memories are always loaded.',
+        },
+        categories: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Optional: filter Phase 2 search to specific categories (e.g., ["decisions", "technical_stack", "active_project"]).',
         },
       },
       required: ['topics'],
@@ -73,33 +80,42 @@ Use this context to provide continuity — the user should not need to re-explai
   {
     name: 'memory_save',
     description: `Save important information to persistent memory so it will be available in future conversations.
-Call this whenever you learn: facts about the user or their work, decisions that were made, user preferences,
-project-specific information, instructions the user wants remembered, or any context that would be useful later.
-Save proactively — it's better to save too much than to lose important context.`,
+Call this whenever you learn: facts about the user or their work, decisions made, user preferences, project-specific info, or standing instructions.
+Choose the correct tier and category to ensure fast retrieval: use tier=core for user profile facts and standing instructions, tier=hot for active project details and recent decisions, tier=warm for general facts (default).`,
     inputSchema: {
       type: 'object',
       properties: {
         content: {
           type: 'string',
-          description: 'The information to remember. Write as a complete, self-contained sentence that will be understandable without the surrounding conversation.',
+          description: 'The information to remember. Write as a complete, self-contained sentence — understandable without the surrounding conversation.',
         },
         type: {
           type: 'string',
           enum: ['fact', 'decision', 'preference', 'instruction', 'entity_relation', 'summary'],
-          description: 'Category: fact=general info, decision=choice made, preference=user likes/dislikes, instruction=rule to follow, entity_relation=relationship between entities, summary=conversation summary.',
+          description: 'fact=general info, decision=choice made with rationale, preference=user likes/dislikes, instruction=rule to always follow, entity_relation=relationship between things, summary=session overview.',
+        },
+        tier: {
+          type: 'string',
+          enum: ['core', 'hot', 'warm', 'cold'],
+          description: 'Retrieval priority. core=always loaded (user profile, standing instructions), hot=boosted in search (active project, recent decisions), warm=standard search (default), cold=archival.',
+        },
+        category: {
+          type: 'string',
+          enum: ['user_profile','meta_instructions','active_project','technical_stack','preferences','workflow','domain_knowledge','decisions','constraints','relationships','temporal','archive','general'],
+          description: 'Semantic category for organized retrieval. Choose the most specific matching category.',
         },
         importance: {
           type: 'number',
-          description: 'Importance score 0.0-1.0. Use 0.9+ for critical decisions/instructions, 0.7 for important facts, 0.5 for general info.',
+          description: 'Priority 0.0-1.0. 0.9-1.0=critical rules/decisions, 0.7-0.8=important facts, 0.5-0.6=general context, 0.3-0.4=minor details.',
         },
         tags: {
           type: 'array',
           items: { type: 'string' },
-          description: 'Keywords for categorization (e.g., ["project:memoryai", "tech:typescript", "preference"]).',
+          description: 'Keywords for filtering (e.g., ["project:memoryai", "tech:typescript"]).',
         },
         project_id: {
           type: 'string',
-          description: 'Optional project UUID to associate this memory with a specific project.',
+          description: 'Optional project UUID to scope this memory to a specific project.',
         },
       },
       required: ['content', 'type'],
@@ -221,48 +237,101 @@ async function handleTool(
       const topics = (args.topics as string[]).join(' ');
       const limit = Math.min((args.limit as number | undefined) ?? 10, 20);
       const projectId = args.project_id as string | undefined;
+      const validCategories: MemoryCategory[] = [
+        'user_profile','meta_instructions','active_project','technical_stack',
+        'preferences','workflow','domain_knowledge','decisions','constraints',
+        'relationships','temporal','archive','general',
+      ];
+      const rawCats = Array.isArray(args.categories) ? args.categories as string[] : undefined;
+      const categories = rawCats?.filter(c => validCategories.includes(c as MemoryCategory)) as MemoryCategory[] | undefined;
 
-      const [memories, entities] = await Promise.all([
-        memoryService.search(userId, { query: topics, limit, project_id: projectId }),
-        entityService.search(userId, topics, 3),
+      // ── Phase 1: instant core context (no vector, Redis-cached) ──
+      // ── Phase 2: semantic search hot+warm tiers (parallel) ───────
+      const [bundle, topicMemories, topicEntities] = await Promise.all([
+        contextBundleService.get(userId),
+        memoryService.search(userId, {
+          query: topics,
+          limit,
+          project_id: projectId,
+          categories,
+        }),
+        entityService.search(userId, topics, 5),
       ]);
 
-      const context: McpMemoryContext = {
-        memories: memories.map(m => ({
-          content: m.content,
-          type: m.type,
-          importance: m.importance,
-          relevance_score: m.combined_score,
-          created_at: m.created_at.toISOString(),
-        })),
-        entities: entities.map(e => ({
-          name: e.name,
-          type: e.type,
-          facts: (e.facts as Array<{ content: string }>).map(f => f.content),
-        })),
-        total_found: memories.length,
-      };
+      const coreText = contextBundleService.formatForModel(bundle, projectId);
+      const hasCore = coreText.trim().length > 0;
+      const hasTopicMemories = topicMemories.length > 0 || topicEntities.length > 0;
 
-      if (context.memories.length === 0 && context.entities.length === 0) {
+      if (!hasCore && !hasTopicMemories) {
         return {
-          content: [{ type: 'text', text: 'No relevant memories found for this topic. This may be the first conversation about it.' }],
+          content: [{ type: 'text', text: 'No memories found yet. This appears to be a new user or the first conversation on this topic. Introduce yourself and start building context.' }],
         };
       }
 
-      const text = formatContextForModel(context);
-      return { content: [{ type: 'text', text }] };
+      const lines: string[] = ['=== PERSISTENT MEMORY CONTEXT ===', ''];
+
+      // Phase 1 output
+      if (hasCore) {
+        lines.push(coreText);
+        lines.push('');
+      }
+
+      // Phase 2 output — topic-specific memories
+      if (topicMemories.length > 0) {
+        lines.push('── TOPIC-SPECIFIC MEMORIES ──────────────────────────');
+        for (const m of topicMemories) {
+          const date = new Date(m.created_at).toLocaleDateString('pl-PL');
+          const tierLabel = m.tier === 'hot' ? ' ★' : '';
+          const catLabel = m.category !== 'general' ? ` [${m.category.replace('_', ' ')}]` : '';
+          lines.push(`•${tierLabel}${catLabel} ${m.content}  (${date}, score: ${m.combined_score.toFixed(2)})`);
+        }
+        lines.push('');
+      }
+
+      // Entity context
+      if (topicEntities.length > 0) {
+        lines.push('── RELEVANT ENTITIES ────────────────────────────────');
+        for (const e of topicEntities) {
+          const facts = (e.facts as Array<{ content: string }>)
+            .slice(0, 4)
+            .map(f => `  • ${f.content}`)
+            .join('\n');
+          lines.push(`${e.name} (${e.type}):\n${facts}`);
+        }
+        lines.push('');
+      }
+
+      lines.push('=== END OF MEMORY CONTEXT ===');
+      lines.push('Use this context. Do not ask the user for information already present here.');
+
+      return { content: [{ type: 'text', text: lines.join('\n') }] };
     }
 
     case 'memory_save': {
       const validMemoryTypes: MemoryType[] = ['fact', 'decision', 'preference', 'instruction', 'entity_relation', 'summary'];
+      const validTiers = ['core', 'hot', 'warm', 'cold'] as const;
+      const validCategories2: MemoryCategory[] = [
+        'user_profile','meta_instructions','active_project','technical_stack',
+        'preferences','workflow','domain_knowledge','decisions','constraints',
+        'relationships','temporal','archive','general',
+      ];
+
       const rawType = args.type as string | undefined;
+      const rawTier = args.tier as string | undefined;
+      const rawCat = args.category as string | undefined;
+
       const memType: MemoryType = rawType && validMemoryTypes.includes(rawType as MemoryType)
-        ? (rawType as MemoryType)
-        : 'fact';
+        ? (rawType as MemoryType) : 'fact';
+      const memTier = rawTier && validTiers.includes(rawTier as typeof validTiers[number])
+        ? (rawTier as typeof validTiers[number]) : 'warm';
+      const memCategory: MemoryCategory = rawCat && validCategories2.includes(rawCat as MemoryCategory)
+        ? (rawCat as MemoryCategory) : 'general';
 
       const memory = await memoryService.create(userId, {
         content: args.content as string,
         type: memType,
+        tier: memTier,
+        category: memCategory,
         importance: typeof args.importance === 'number' ? Math.max(0, Math.min(1, args.importance)) : undefined,
         tags: Array.isArray(args.tags) ? (args.tags as string[]).slice(0, 20) : undefined,
         project_id: typeof args.project_id === 'string' ? args.project_id : undefined,
@@ -270,7 +339,7 @@ async function handleTool(
       return {
         content: [{
           type: 'text',
-          text: `Memory saved (id: ${memory.id}, type: ${memory.type}, importance: ${memory.importance})`,
+          text: `Memory saved ✓ (id: ${memory.id}, tier: ${memory.tier}, category: ${memory.category}, type: ${memory.type}, importance: ${memory.importance})`,
         }],
       };
     }
@@ -359,35 +428,6 @@ async function handleTool(
     default:
       throw new Error(`Unknown tool: ${toolName}`);
   }
-}
-
-function formatContextForModel(ctx: McpMemoryContext): string {
-  const lines: string[] = ['=== PERSISTENT MEMORY CONTEXT ===', ''];
-
-  if (ctx.memories.length > 0) {
-    lines.push('MEMORIES FROM PREVIOUS SESSIONS:');
-    for (const m of ctx.memories) {
-      const date = new Date(m.created_at).toLocaleDateString('pl-PL');
-      lines.push(`• [${m.type.toUpperCase()}] ${m.content} (${date})`);
-    }
-    lines.push('');
-  }
-
-  if (ctx.entities.length > 0) {
-    lines.push('KNOWN ENTITIES:');
-    for (const e of ctx.entities) {
-      lines.push(`• ${e.name} (${e.type}):`);
-      for (const fact of e.facts.slice(0, 3)) {
-        lines.push(`  - ${fact}`);
-      }
-    }
-    lines.push('');
-  }
-
-  lines.push('=== END OF MEMORY CONTEXT ===');
-  lines.push('Use this context to provide continuity. The user should not need to re-explain previously discussed topics.');
-
-  return lines.join('\n');
 }
 
 // ── MCP HTTP Handler ────────────────────────────────────────

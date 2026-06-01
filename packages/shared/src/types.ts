@@ -5,6 +5,35 @@ export type EntityType = 'person' | 'project' | 'company' | 'tool' | 'concept' |
 export type SessionStatus = 'active' | 'closed' | 'distilled';
 export type MessageRole = 'user' | 'assistant' | 'system' | 'tool';
 
+/**
+ * Retrieval priority tier.
+ * - core  → always loaded without vector search (user profile, meta instructions)
+ * - hot   → boosted in semantic search (recent decisions, active projects)
+ * - warm  → standard search (default)
+ * - cold  → archival — searchable but excluded from get_context
+ */
+export type MemoryTier = 'core' | 'hot' | 'warm' | 'cold';
+
+/**
+ * Semantic category for filtering and fast retrieval.
+ */
+export type MemoryCategory =
+  | 'user_profile'       // Who the user is, role, background
+  | 'meta_instructions'  // Instructions to the AI about behavior
+  | 'active_project'     // Currently worked-on project context
+  | 'technical_stack'    // Languages, frameworks, tools in use
+  | 'preferences'        // Work habits, style, format preferences
+  | 'workflow'           // Recurring processes and routines
+  | 'domain_knowledge'   // Industry/domain facts and glossary
+  | 'decisions'          // Past decisions with rationale
+  | 'constraints'        // Deadlines, budgets, limitations
+  | 'relationships'      // People, companies, org structure
+  | 'temporal'           // Time-sensitive: events, meetings, deadlines
+  | 'archive'            // Superseded or historical info
+  | 'general';           // Uncategorized (default)
+
+export type LinkType = 'references' | 'supersedes' | 'elaborates' | 'contradicts' | 'relates_to';
+
 export interface User {
   id: string;
   email?: string;
@@ -54,10 +83,14 @@ export interface Memory {
   user_id: string;
   project_id?: string;
   session_id?: string;
+  tier: MemoryTier;
+  category: MemoryCategory;
   type: MemoryType;
   content: string;
   importance: number;
   tags: string[];
+  language: string;
+  pinned: boolean;
   metadata: Record<string, unknown>;
   created_at: Date;
   updated_at: Date;
@@ -68,7 +101,59 @@ export interface Memory {
 export interface MemorySearchResult extends Memory {
   vector_score: number;
   text_score: number;
+  recency_score: number;
   combined_score: number;
+}
+
+export interface CoreMemory {
+  id: string;
+  content: string;
+  type: MemoryType;
+  category: MemoryCategory;
+  importance: number;
+  tags: string[];
+  metadata: Record<string, unknown>;
+  created_at: Date;
+}
+
+export interface ContextBundle {
+  user_id: string;
+  core_memories: CoreMemoryJson[];
+  key_entities: EntityJson[];
+  hot_summary: string;
+  built_at: Date;
+  is_stale: boolean;
+}
+
+export interface CoreMemoryJson {
+  id: string;
+  content: string;
+  type: string;
+  category: string;
+  importance: number;
+  created_at: string;
+}
+
+export interface EntityJson {
+  name: string;
+  type: string;
+  facts: Array<{ content: string; source?: string }>;
+}
+
+export interface MemoryLink {
+  id: string;
+  source_id: string;
+  target_memory_id?: string;
+  target_entity_id?: string;
+  link_type: LinkType;
+  created_at: Date;
+}
+
+export interface MemoryStats {
+  tier: MemoryTier;
+  category: MemoryCategory;
+  count: number;
+  avg_importance: number;
 }
 
 export interface Entity {
@@ -95,8 +180,12 @@ export interface EntityFact {
 export interface CreateMemoryDto {
   content: string;
   type?: MemoryType;
+  tier?: MemoryTier;
+  category?: MemoryCategory;
   importance?: number;
   tags?: string[];
+  language?: string;
+  pinned?: boolean;
   project_id?: string;
   session_id?: string;
   metadata?: Record<string, unknown>;
@@ -105,8 +194,11 @@ export interface CreateMemoryDto {
 export interface UpdateMemoryDto {
   content?: string;
   type?: MemoryType;
+  tier?: MemoryTier;
+  category?: MemoryCategory;
   importance?: number;
   tags?: string[];
+  pinned?: boolean;
   metadata?: Record<string, unknown>;
 }
 
@@ -115,7 +207,10 @@ export interface SearchMemoriesDto {
   limit?: number;
   project_id?: string;
   types?: MemoryType[];
+  categories?: MemoryCategory[];
+  tiers?: MemoryTier[];
   min_importance?: number;
+  include_cold?: boolean;
 }
 
 export interface CreateSessionDto {

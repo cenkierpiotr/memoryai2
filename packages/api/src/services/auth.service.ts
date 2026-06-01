@@ -24,7 +24,11 @@ export const authService = {
 
   async ensureAdminUser(): Promise<User> {
     const existing = await this.findByApiKey(config.auth.adminApiKey);
-    if (existing) return existing;
+    if (existing) {
+      // Seed taxonomy if this user has no memories yet (first boot after schema reset)
+      await this.seedUserTaxonomy(existing.id);
+      return existing;
+    }
 
     const res = await query<User>(
       `INSERT INTO users (email, name, api_key, is_admin)
@@ -33,7 +37,18 @@ export const authService = {
        RETURNING id, email, name, api_key, is_admin, metadata, created_at, updated_at`,
       ['admin@memoryai.local', 'Admin', config.auth.adminApiKey]
     );
-    return res.rows[0];
+    const user = res.rows[0];
+    await this.seedUserTaxonomy(user.id);
+    return user;
+  },
+
+  async seedUserTaxonomy(userId: string): Promise<void> {
+    try {
+      await query('SELECT seed_user_memory($1)', [userId]);
+    } catch (err) {
+      // Non-fatal — function may not exist if DB schema is being migrated
+      process.stderr.write(`[auth] seed_user_memory warning: ${(err as Error).message}\n`);
+    }
   },
 
   generateApiKey(): string {
