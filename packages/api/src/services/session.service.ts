@@ -39,27 +39,46 @@ export const sessionService = {
   }> {
     const limit = Math.min(opts.limit ?? 20, 100);
     const offset = opts.offset ?? 0;
-    const statusFilter = opts.status ? `AND status = '${opts.status}'` : '';
+
+    const conditions = ['user_id = $1'];
+    const params: unknown[] = [userId];
+    let paramIdx = 2;
+
+    if (opts.status) {
+      conditions.push(`status = $${paramIdx++}`);
+      params.push(opts.status);
+    }
+
+    const where = conditions.join(' AND ');
 
     const [dataRes, countRes] = await Promise.all([
       query<Session>(
         `SELECT id, user_id, project_id, title, model, status, message_count,
                 metadata, started_at, ended_at, distilled_at
-         FROM sessions WHERE user_id = $1 ${statusFilter}
-         ORDER BY started_at DESC LIMIT $2 OFFSET $3`,
-        [userId, limit, offset]
+         FROM sessions WHERE ${where}
+         ORDER BY started_at DESC LIMIT $${paramIdx} OFFSET $${paramIdx + 1}`,
+        [...params, limit, offset]
       ),
       query<{ count: string }>(
-        `SELECT COUNT(*) as count FROM sessions WHERE user_id = $1 ${statusFilter}`,
-        [userId]
+        `SELECT COUNT(*) as count FROM sessions WHERE ${where}`,
+        params
       ),
     ]);
 
     return { data: dataRes.rows, total: parseInt(countRes.rows[0].count, 10) };
   },
 
-  async addMessage(sessionId: string, dto: AddMessageDto): Promise<SessionMessage> {
+  async addMessage(userId: string, sessionId: string, dto: AddMessageDto): Promise<SessionMessage> {
     return withTransaction(async (client) => {
+      // Verify session belongs to this user before inserting
+      const sessionCheck = await client.query(
+        'SELECT id FROM sessions WHERE id = $1 AND user_id = $2',
+        [sessionId, userId]
+      );
+      if (sessionCheck.rowCount === 0) {
+        throw Object.assign(new Error('Session not found'), { statusCode: 404 });
+      }
+
       const msgRes = await client.query<SessionMessage>(
         `INSERT INTO session_messages (session_id, role, content, metadata)
          VALUES ($1, $2, $3, $4)
@@ -76,12 +95,14 @@ export const sessionService = {
     });
   },
 
-  async getMessages(sessionId: string, limit = 100): Promise<SessionMessage[]> {
+  async getMessages(userId: string, sessionId: string, limit = 100): Promise<SessionMessage[]> {
     const res = await query<SessionMessage>(
-      `SELECT id, session_id, role, content, metadata, created_at
-       FROM session_messages WHERE session_id = $1
-       ORDER BY created_at ASC LIMIT $2`,
-      [sessionId, limit]
+      `SELECT sm.id, sm.session_id, sm.role, sm.content, sm.metadata, sm.created_at
+       FROM session_messages sm
+       JOIN sessions s ON s.id = sm.session_id
+       WHERE sm.session_id = $1 AND s.user_id = $2
+       ORDER BY sm.created_at ASC LIMIT $3`,
+      [sessionId, userId, limit]
     );
     return res.rows;
   },

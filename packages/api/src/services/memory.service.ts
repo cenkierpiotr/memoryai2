@@ -81,10 +81,12 @@ export const memoryService = {
       ]
     );
 
-    // Update access stats async (fire & forget)
+    // Update access stats async (fire & forget, non-blocking)
     if (res.rows.length > 0) {
       const ids = res.rows.map(r => r.id);
-      query('SELECT touch_memories($1)', [ids]).catch(() => {});
+      query('SELECT touch_memories($1)', [ids]).catch((err: Error) => {
+        process.stderr.write(`[memory] touch_memories failed: ${err.message}\n`);
+      });
     }
 
     return res.rows;

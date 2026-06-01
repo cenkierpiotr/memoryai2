@@ -35,7 +35,7 @@ export async function entitiesRoutes(app: FastifyInstance): Promise<void> {
     const params = z.object({
       limit: z.coerce.number().int().min(1).max(100).optional(),
       offset: z.coerce.number().int().min(0).optional(),
-      type: z.string().optional(),
+      type: z.enum(['person', 'project', 'company', 'tool', 'concept', 'place', 'other']).optional(),
     }).parse(req.query);
     const result = await entityService.list(req.user.id, params);
     return reply.send({ data: result.data, meta: { total: result.total } });

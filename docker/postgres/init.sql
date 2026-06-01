@@ -138,7 +138,8 @@ CREATE TABLE distillation_jobs (
   error        TEXT,
   started_at   TIMESTAMPTZ,
   finished_at  TIMESTAMPTZ,
-  created_at   TIMESTAMPTZ DEFAULT NOW()
+  created_at   TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE (session_id)
 );
 
 -- ──────────────────────────────────────────

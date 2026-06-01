@@ -13,7 +13,7 @@ import { memoryService } from '../services/memory.service.js';
 import { entityService } from '../services/entity.service.js';
 import { sessionService } from '../services/session.service.js';
 import { authService } from '../services/auth.service.js';
-import type { McpMemoryContext } from '@memoryai/shared';
+import type { McpMemoryContext, MemoryType } from '@memoryai/shared';
 
 // ── MCP Protocol Types ──────────────────────────────────────
 
@@ -254,12 +254,18 @@ async function handleTool(
     }
 
     case 'memory_save': {
+      const validMemoryTypes: MemoryType[] = ['fact', 'decision', 'preference', 'instruction', 'entity_relation', 'summary'];
+      const rawType = args.type as string | undefined;
+      const memType: MemoryType = rawType && validMemoryTypes.includes(rawType as MemoryType)
+        ? (rawType as MemoryType)
+        : 'fact';
+
       const memory = await memoryService.create(userId, {
         content: args.content as string,
-        type: (args.type as string | undefined) as ReturnType<typeof getMemoryType> ?? 'fact',
-        importance: args.importance as number | undefined,
-        tags: args.tags as string[] | undefined,
-        project_id: args.project_id as string | undefined,
+        type: memType,
+        importance: typeof args.importance === 'number' ? Math.max(0, Math.min(1, args.importance)) : undefined,
+        tags: Array.isArray(args.tags) ? (args.tags as string[]).slice(0, 20) : undefined,
+        project_id: typeof args.project_id === 'string' ? args.project_id : undefined,
       });
       return {
         content: [{
@@ -270,10 +276,14 @@ async function handleTool(
     }
 
     case 'memory_search': {
+      const validMemoryTypes2: MemoryType[] = ['fact', 'decision', 'preference', 'instruction', 'entity_relation', 'summary'];
+      const rawTypes = Array.isArray(args.types) ? args.types as string[] : undefined;
+      const filteredTypes = rawTypes?.filter(t => validMemoryTypes2.includes(t as MemoryType)) as MemoryType[] | undefined;
+
       const results = await memoryService.search(userId, {
         query: args.query as string,
-        limit: args.limit as number | undefined,
-        types: args.types as string[] | undefined as ReturnType<typeof getMemoryTypes>,
+        limit: typeof args.limit === 'number' ? Math.min(Math.max(1, args.limit), 20) : undefined,
+        types: filteredTypes,
         project_id: args.project_id as string | undefined,
       });
       if (results.length === 0) {
@@ -315,22 +325,21 @@ async function handleTool(
     }
 
     case 'session_end': {
-      const { sessionId, summary } = {
-        sessionId: args.session_id as string,
-        summary: args.summary as string | undefined,
-      };
+      const sessionId = args.session_id as string;
+      const summary = typeof args.summary === 'string' ? args.summary : undefined;
 
-      const session = await sessionService.findByIdAny(sessionId);
+      // Use userId-scoped lookup to prevent closing other users' sessions
+      const session = await sessionService.findById(userId, sessionId);
       if (!session) {
-        return { content: [{ type: 'text', text: 'Session not found.' }] };
+        return { content: [{ type: 'text', text: 'Session not found or access denied.' }] };
       }
 
       if (session.status === 'active') {
-        await sessionService.close(session.user_id, sessionId);
+        await sessionService.close(userId, sessionId);
       }
 
       if (summary) {
-        await memoryService.create(session.user_id, {
+        await memoryService.create(userId, {
           content: summary,
           type: 'summary',
           importance: 0.7,
@@ -350,14 +359,6 @@ async function handleTool(
     default:
       throw new Error(`Unknown tool: ${toolName}`);
   }
-}
-
-function getMemoryType(t: string) {
-  return t as 'fact' | 'decision' | 'preference' | 'instruction' | 'entity_relation' | 'summary';
-}
-
-function getMemoryTypes(t: string[] | undefined) {
-  return t as Array<'fact' | 'decision' | 'preference' | 'instruction' | 'entity_relation' | 'summary'> | undefined;
 }
 
 function formatContextForModel(ctx: McpMemoryContext): string {

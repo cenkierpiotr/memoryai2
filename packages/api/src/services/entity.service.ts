@@ -4,7 +4,8 @@ import type { Entity, CreateEntityDto, EntityFact } from '@memoryai/shared';
 
 export const entityService = {
   async upsert(userId: string, dto: CreateEntityDto): Promise<Entity> {
-    const embedding = await embeddingService.embed(dto.name + ' ' + (dto.facts?.map(f => f.content).join(' ') ?? ''));
+    const factsText = dto.facts?.map(f => f.content).join('. ') ?? '';
+    const embedding = await embeddingService.embed(`${dto.name}. ${factsText}`.trim());
     const vectorLiteral = embeddingService.toVectorLiteral(embedding);
 
     const res = await query<Entity>(
@@ -32,13 +33,13 @@ export const entityService = {
     return res.rows[0];
   },
 
-  async addFact(userId: string, entityName: string, fact: EntityFact): Promise<Entity | null> {
+  async addFact(userId: string, entityId: string, fact: EntityFact): Promise<Entity | null> {
     const res = await query<Entity>(
       `UPDATE entities
        SET facts = facts || $1::jsonb, updated_at = NOW()
-       WHERE user_id = $2 AND name = $3
+       WHERE user_id = $2 AND id = $3
        RETURNING id, user_id, project_id, name, type, aliases, facts, metadata, created_at, updated_at`,
-      [JSON.stringify([fact]), userId, entityName]
+      [JSON.stringify([fact]), userId, entityId]
     );
     return res.rows[0] ?? null;
   },
@@ -75,18 +76,28 @@ export const entityService = {
   }> {
     const limit = Math.min(opts.limit ?? 20, 100);
     const offset = opts.offset ?? 0;
-    const typeFilter = opts.type ? `AND type = '${opts.type}'` : '';
+
+    const conditions = ['user_id = $1'];
+    const params: unknown[] = [userId];
+    let paramIdx = 2;
+
+    if (opts.type) {
+      conditions.push(`type = $${paramIdx++}`);
+      params.push(opts.type);
+    }
+
+    const where = conditions.join(' AND ');
 
     const [dataRes, countRes] = await Promise.all([
       query<Entity>(
         `SELECT id, user_id, project_id, name, type, aliases, facts, metadata, created_at, updated_at
-         FROM entities WHERE user_id = $1 ${typeFilter}
-         ORDER BY updated_at DESC LIMIT $2 OFFSET $3`,
-        [userId, limit, offset]
+         FROM entities WHERE ${where}
+         ORDER BY updated_at DESC LIMIT $${paramIdx} OFFSET $${paramIdx + 1}`,
+        [...params, limit, offset]
       ),
       query<{ count: string }>(
-        `SELECT COUNT(*) as count FROM entities WHERE user_id = $1 ${typeFilter}`,
-        [userId]
+        `SELECT COUNT(*) as count FROM entities WHERE ${where}`,
+        params
       ),
     ]);
 

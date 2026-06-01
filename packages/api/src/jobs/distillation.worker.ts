@@ -191,11 +191,15 @@ export function startDistillationWorker(): Worker<DistillationJob> {
     async (job: Job<DistillationJob>) => {
       const { sessionId, userId } = job.data;
 
-      // Mark job as running
+      // Upsert job record — handles retries and crash recovery correctly
       await query(
         `INSERT INTO distillation_jobs (session_id, user_id, status, started_at)
          VALUES ($1, $2, 'running', NOW())
-         ON CONFLICT DO NOTHING`,
+         ON CONFLICT (session_id) DO UPDATE SET
+           status = 'running',
+           started_at = NOW(),
+           error = NULL
+         WHERE distillation_jobs.status != 'done'`,
         [sessionId, userId]
       );
 
@@ -212,10 +216,11 @@ export function startDistillationWorker(): Worker<DistillationJob> {
 
   worker.on('failed', async (job, err) => {
     if (!job) return;
+    process.stderr.write(`[distillation] Job failed for session ${job.data.sessionId}: ${err.message}\n`);
     await query(
       `UPDATE distillation_jobs SET status = 'failed', error = $1, finished_at = NOW()
        WHERE session_id = $2 AND status = 'running'`,
-      [err.message, job.data.sessionId]
+      [err.message.slice(0, 500), job.data.sessionId]
     );
   });
 
@@ -224,18 +229,31 @@ export function startDistillationWorker(): Worker<DistillationJob> {
 
 // ── Periodic stale session checker ─────────────────────────
 
-export async function scheduleStaleSessionCheck(): Promise<NodeJS.Timeout> {
+let staleCheckInterval: NodeJS.Timeout | null = null;
+
+export async function scheduleStaleSessionCheck(): Promise<void> {
   const { distillationQueue } = await import('./distillation.queue.js');
 
   async function check() {
-    const staleSessions = await sessionService.findStaleForDistillation(
-      config.distillation.inactivityMinutes
-    );
-    for (const session of staleSessions) {
-      await distillationQueue.add({ sessionId: session.id, userId: session.user_id });
+    try {
+      const staleSessions = await sessionService.findStaleForDistillation(
+        config.distillation.inactivityMinutes
+      );
+      for (const session of staleSessions) {
+        await distillationQueue.add({ sessionId: session.id, userId: session.user_id });
+      }
+    } catch (err) {
+      process.stderr.write(`[distillation] Stale session check failed: ${(err as Error).message}\n`);
     }
   }
 
   await check();
-  return setInterval(check, 60_000);
+  staleCheckInterval = setInterval(check, 60_000);
+}
+
+export function stopStaleSessionCheck(): void {
+  if (staleCheckInterval) {
+    clearInterval(staleCheckInterval);
+    staleCheckInterval = null;
+  }
 }

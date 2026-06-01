@@ -75,3 +75,24 @@ export const config = {
     rateLimitRpm: optionalNum('RATE_LIMIT_RPM', 120),
   },
 } as const;
+
+// Validate provider-specific API keys at startup
+export function validateConfig(): void {
+  const { embedding, distillation } = config;
+
+  if (embedding.provider === 'gemini' && !embedding.geminiApiKey) {
+    throw new Error('GEMINI_API_KEY is required when EMBEDDING_PROVIDER=gemini');
+  }
+  if (embedding.provider === 'openai' && !embedding.openaiApiKey) {
+    throw new Error('OPENAI_API_KEY is required when EMBEDDING_PROVIDER=openai');
+  }
+  if (distillation.provider === 'gemini' && !distillation.geminiApiKey) {
+    throw new Error('GEMINI_API_KEY is required when DISTILL_PROVIDER=gemini');
+  }
+  if (distillation.provider === 'openai' && !distillation.openaiApiKey) {
+    throw new Error('OPENAI_API_KEY is required when DISTILL_PROVIDER=openai');
+  }
+  if (distillation.provider === 'anthropic' && !distillation.anthropicApiKey) {
+    throw new Error('ANTHROPIC_API_KEY is required when DISTILL_PROVIDER=anthropic');
+  }
+}

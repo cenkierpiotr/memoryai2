@@ -54,7 +54,7 @@ export async function sessionsRoutes(app: FastifyInstance): Promise<void> {
     const { limit } = z.object({ limit: z.coerce.number().optional() }).parse(req.query);
     const session = await sessionService.findById(req.user.id, id);
     if (!session) return reply.code(404).send({ error: 'Not Found', message: 'Session not found', statusCode: 404 });
-    const messages = await sessionService.getMessages(id, limit);
+    const messages = await sessionService.getMessages(req.user.id, id, limit);
     return reply.send({ data: messages });
   });
 
@@ -62,9 +62,7 @@ export async function sessionsRoutes(app: FastifyInstance): Promise<void> {
   app.post('/sessions/:id/messages', async (req, reply) => {
     const { id } = req.params as { id: string };
     const body = messageSchema.parse(req.body);
-    const session = await sessionService.findById(req.user.id, id);
-    if (!session) return reply.code(404).send({ error: 'Not Found', message: 'Session not found', statusCode: 404 });
-    const message = await sessionService.addMessage(id, body);
+    const message = await sessionService.addMessage(req.user.id, id, body);
     return reply.code(201).send({ data: message });
   });
 

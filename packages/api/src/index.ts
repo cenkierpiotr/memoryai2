@@ -4,14 +4,14 @@ import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
 import sensible from '@fastify/sensible';
-import { config } from './config.js';
+import { config, validateConfig } from './config.js';
 import { pool } from './db/pool.js';
 import { authService } from './services/auth.service.js';
 import { memoriesRoutes } from './routes/memories.route.js';
 import { sessionsRoutes } from './routes/sessions.route.js';
 import { entitiesRoutes } from './routes/entities.route.js';
 import { mcpRoutes } from './mcp/server.js';
-import { startDistillationWorker, scheduleStaleSessionCheck } from './jobs/distillation.worker.js';
+import { startDistillationWorker, scheduleStaleSessionCheck, stopStaleSessionCheck } from './jobs/distillation.worker.js';
 
 const app = Fastify({
   logger: {
@@ -86,6 +86,9 @@ app.setErrorHandler((err, _req, reply) => {
 
 async function start() {
   try {
+    // Validate config before anything else
+    validateConfig();
+
     // Verify DB connection
     await pool.query('SELECT 1');
     app.log.info('Database connected');
@@ -115,6 +118,7 @@ async function start() {
 // Graceful shutdown
 const shutdown = async (signal: string) => {
   app.log.info(`Received ${signal}, shutting down gracefully...`);
+  stopStaleSessionCheck();
   await app.close();
   await pool.end();
   process.exit(0);
