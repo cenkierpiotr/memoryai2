@@ -4,6 +4,9 @@ import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
 import sensible from '@fastify/sensible';
+import staticFiles from '@fastify/static';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
 import { config, validateConfig } from './config.js';
 import { pool } from './db/pool.js';
 import { authService } from './services/auth.service.js';
@@ -51,6 +54,22 @@ await app.register(rateLimit, {
 });
 
 await app.register(sensible);
+
+// ── Static Dashboard ─────────────────────────────────────────
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const dashboardDist = join(__dirname, 'dashboard');
+
+try {
+  await app.register(staticFiles, {
+    root: dashboardDist,
+    prefix: '/dashboard/',
+    decorateReply: false,
+  });
+  app.get('/dashboard', (_req, reply) => reply.redirect('/dashboard/'));
+} catch {
+  app.log.warn('Dashboard static files not found — skipping (run: npm run build -w packages/dashboard)');
+}
 
 // ── Routes ───────────────────────────────────────────────────
 

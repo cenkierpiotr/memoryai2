@@ -5,13 +5,17 @@ WORKDIR /app
 COPY package.json package-lock.json* ./
 COPY packages/shared/package.json ./packages/shared/
 COPY packages/api/package.json ./packages/api/
+COPY packages/dashboard/package.json ./packages/dashboard/
 
-RUN npm ci --workspace=packages/shared --workspace=packages/api
+RUN npm ci --workspace=packages/shared --workspace=packages/api --workspace=packages/dashboard
 
 COPY packages/shared ./packages/shared
 COPY packages/api ./packages/api
+COPY packages/dashboard ./packages/dashboard
 
-RUN npm run build -w packages/shared && npm run build -w packages/api
+RUN npm run build -w packages/shared && \
+    npm run build -w packages/api && \
+    npm run build -w packages/dashboard
 
 FROM node:20-alpine AS runner
 
@@ -22,6 +26,7 @@ WORKDIR /app
 COPY --from=builder --chown=memoryai:nodejs /app/packages/api/dist ./dist
 COPY --from=builder --chown=memoryai:nodejs /app/packages/api/package.json ./package.json
 COPY --from=builder --chown=memoryai:nodejs /app/node_modules ./node_modules
+COPY --from=builder --chown=memoryai:nodejs /app/packages/dashboard/dist ./dist/dashboard
 
 USER memoryai
 
