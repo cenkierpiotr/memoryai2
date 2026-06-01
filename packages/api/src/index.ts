@@ -10,6 +10,7 @@ import { authService } from './services/auth.service.js';
 import { memoriesRoutes } from './routes/memories.route.js';
 import { sessionsRoutes } from './routes/sessions.route.js';
 import { entitiesRoutes } from './routes/entities.route.js';
+import { projectsRoutes } from './routes/projects.route.js';
 import { mcpRoutes } from './mcp/server.js';
 import { startDistillationWorker, scheduleStaleSessionCheck, stopStaleSessionCheck } from './jobs/distillation.worker.js';
 
@@ -59,6 +60,7 @@ app.get('/health', async () => ({
 await app.register(memoriesRoutes, { prefix: '/v1' });
 await app.register(sessionsRoutes, { prefix: '/v1' });
 await app.register(entitiesRoutes, { prefix: '/v1' });
+await app.register(projectsRoutes, { prefix: '/v1' });
 await app.register(mcpRoutes);
 
 // ── Error Handler ────────────────────────────────────────────

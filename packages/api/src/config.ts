@@ -73,6 +73,7 @@ export const config = {
   security: {
     searchMaxResults: optionalNum('SEARCH_MAX_RESULTS', 20),
     rateLimitRpm: optionalNum('RATE_LIMIT_RPM', 120),
+    encryptionKey: required('ENCRYPTION_KEY'),
   },
 } as const;
 

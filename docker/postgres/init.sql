@@ -56,6 +56,8 @@ CREATE TABLE projects (
   id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id     UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   name        VARCHAR(255) NOT NULL,
+  aliases     TEXT[] NOT NULL DEFAULT '{}',  -- alternative names: repo name, workspace, abbreviation
+  git_remote  TEXT,                          -- e.g. github.com/user/repo for auto-detection
   description TEXT,
   metadata    JSONB DEFAULT '{}',
   created_at  TIMESTAMPTZ DEFAULT NOW(),
@@ -63,7 +65,9 @@ CREATE TABLE projects (
   UNIQUE (user_id, name)
 );
 
-CREATE INDEX idx_projects_user ON projects (user_id);
+CREATE INDEX idx_projects_user    ON projects (user_id);
+CREATE INDEX idx_projects_aliases ON projects USING GIN (aliases);
+CREATE INDEX idx_projects_remote  ON projects (user_id, git_remote) WHERE git_remote IS NOT NULL;
 
 -- ──────────────────────────────────────────
 -- SESSIONS
@@ -118,8 +122,13 @@ CREATE TABLE memories (
                       'user_profile','meta_instructions','active_project',
                       'technical_stack','preferences','workflow',
                       'domain_knowledge','decisions','constraints',
-                      'relationships','temporal','archive','general'
+                      'relationships','temporal','archive',
+                      'infrastructure','credentials','shared_config',
+                      'general'
                     )),
+  -- Shared memories are visible across all projects when relevant topic appears
+  -- Auto-set TRUE for categories: credentials, infrastructure, shared_config
+  is_shared       BOOLEAN NOT NULL DEFAULT FALSE,
 
   -- Memory content
   type            VARCHAR(50) NOT NULL DEFAULT 'fact'
@@ -175,6 +184,10 @@ CREATE INDEX idx_memories_recent ON memories (user_id, created_at DESC)
 -- Access count (for auto-promotion queries)
 CREATE INDEX idx_memories_access ON memories (user_id, access_count DESC)
   WHERE tier = 'warm';
+
+-- Shared memories — cross-project access
+CREATE INDEX idx_memories_shared ON memories (user_id, category, importance DESC)
+  WHERE is_shared = TRUE;
 
 -- Note: IVFFlat vector index — create AFTER loading initial data for best performance
 -- CREATE INDEX idx_memories_vector ON memories
@@ -322,6 +335,25 @@ CREATE TRIGGER trg_memories_invalidate_bundle
   EXECUTE FUNCTION invalidate_context_bundle();
 
 -- ──────────────────────────────────────────
+-- FUNCTION: resolve_project
+-- Resolve project name OR any alias to UUID (case-insensitive).
+-- Also matches partial git_remote URL (e.g. "memoryai" matches github.com/user/memoryai).
+-- ──────────────────────────────────────────
+CREATE OR REPLACE FUNCTION resolve_project(p_user_id UUID, p_name TEXT)
+RETURNS UUID AS $$
+  SELECT id FROM projects
+  WHERE user_id = p_user_id
+    AND (
+      lower(name) = lower(p_name)
+      OR lower(p_name) = ANY(SELECT lower(a) FROM unnest(aliases) a)
+      OR (git_remote IS NOT NULL AND lower(git_remote) LIKE '%' || lower(p_name) || '%')
+    )
+  ORDER BY
+    CASE WHEN lower(name) = lower(p_name) THEN 0 ELSE 1 END
+  LIMIT 1;
+$$ LANGUAGE sql STABLE;
+
+-- ──────────────────────────────────────────
 -- FUNCTION: get_core_context
 -- Phase 1 retrieval — no vector needed, sub-millisecond via partial index
 -- ──────────────────────────────────────────
@@ -346,9 +378,16 @@ BEGIN
     AND (
       p_project_id IS NULL
       OR m.project_id = p_project_id
-      OR m.project_id IS NULL   -- global core memories (no project scope)
+      OR m.project_id IS NULL   -- global core memories
+      OR m.is_shared = TRUE     -- shared across all projects
     )
-  ORDER BY m.importance DESC, m.last_accessed DESC
+  ORDER BY
+    -- project-specific first, then shared, then global
+    CASE WHEN m.project_id = p_project_id THEN 0
+         WHEN m.is_shared THEN 1
+         ELSE 2 END,
+    m.importance DESC,
+    m.last_accessed DESC
   LIMIT p_limit;
 END;
 $$ LANGUAGE plpgsql;
@@ -418,7 +457,12 @@ BEGIN
     AND m.tier != 'core'   -- core loaded separately in phase 1
     AND (p_include_cold OR m.tier != 'cold')
     AND m.importance >= p_min_importance
-    AND (p_project_id IS NULL OR m.project_id = p_project_id)
+    AND (
+      p_project_id IS NULL          -- no project filter: all memories
+      OR m.project_id = p_project_id -- memory belongs to this project
+      OR m.project_id IS NULL        -- global memories
+      OR m.is_shared = TRUE          -- shared across all projects
+    )
     AND (p_types IS NULL OR m.type = ANY(p_types))
     AND (p_categories IS NULL OR m.category = ANY(p_categories))
   ORDER BY combined_score DESC
@@ -465,7 +509,7 @@ DECLARE
   v_core_memories JSONB;
   v_key_entities  JSONB;
 BEGIN
-  -- Serialize core memories ordered by importance
+  -- Serialize core memories: global (no project) + shared across all projects
   SELECT COALESCE(jsonb_agg(
     jsonb_build_object(
       'id',          m.id,
@@ -473,13 +517,16 @@ BEGIN
       'type',        m.type,
       'category',    m.category,
       'importance',  m.importance,
+      'is_shared',   m.is_shared,
       'created_at',  m.created_at
     ) ORDER BY m.importance DESC, m.last_accessed DESC
   ), '[]'::jsonb)
   INTO v_core_memories
   FROM memories m
-  WHERE m.user_id = p_user_id AND m.tier = 'core'
-  LIMIT 15;
+  WHERE m.user_id = p_user_id
+    AND m.tier = 'core'
+    AND (m.project_id IS NULL OR m.is_shared = TRUE)
+  LIMIT 20;
 
   -- Serialize pinned + recently updated entities
   SELECT COALESCE(jsonb_agg(

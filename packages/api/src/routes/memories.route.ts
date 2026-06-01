@@ -9,7 +9,9 @@ const TIERS = ['core', 'hot', 'warm', 'cold'] as const;
 const CATEGORIES = [
   'user_profile','meta_instructions','active_project','technical_stack',
   'preferences','workflow','domain_knowledge','decisions','constraints',
-  'relationships','temporal','archive','general',
+  'relationships','temporal','archive',
+  'infrastructure','credentials','shared_config',
+  'general',
 ] as const;
 
 const createSchema = z.object({
@@ -21,6 +23,7 @@ const createSchema = z.object({
   tags: z.array(z.string()).max(20).optional(),
   language: z.string().max(10).optional(),
   pinned: z.boolean().optional(),
+  is_shared: z.boolean().optional(),
   project_id: z.string().uuid().optional(),
   session_id: z.string().uuid().optional(),
   metadata: z.record(z.unknown()).optional(),
@@ -34,6 +37,7 @@ const updateSchema = z.object({
   importance: z.number().min(0).max(1).optional(),
   tags: z.array(z.string()).max(20).optional(),
   pinned: z.boolean().optional(),
+  is_shared: z.boolean().optional(),
   metadata: z.record(z.unknown()).optional(),
 });
 

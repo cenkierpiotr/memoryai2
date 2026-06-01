@@ -30,6 +30,9 @@ export type MemoryCategory =
   | 'relationships'      // People, companies, org structure
   | 'temporal'           // Time-sensitive: events, meetings, deadlines
   | 'archive'            // Superseded or historical info
+  | 'infrastructure'     // Servers, IPs, ports, network config, SSH — shared globally
+  | 'credentials'        // API keys, tokens, secrets — encrypted at rest, shared globally
+  | 'shared_config'      // Config reused across multiple projects — shared globally
   | 'general';           // Uncategorized (default)
 
 export type LinkType = 'references' | 'supersedes' | 'elaborates' | 'contradicts' | 'relates_to';
@@ -49,10 +52,28 @@ export interface Project {
   id: string;
   user_id: string;
   name: string;
+  aliases: string[];
+  git_remote?: string;
   description?: string;
   metadata: Record<string, unknown>;
   created_at: Date;
   updated_at: Date;
+}
+
+export interface CreateProjectDto {
+  name: string;
+  aliases?: string[];
+  git_remote?: string;
+  description?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface UpdateProjectDto {
+  name?: string;
+  aliases?: string[];
+  git_remote?: string;
+  description?: string;
+  metadata?: Record<string, unknown>;
 }
 
 export interface Session {
@@ -91,6 +112,7 @@ export interface Memory {
   tags: string[];
   language: string;
   pinned: boolean;
+  is_shared: boolean;
   metadata: Record<string, unknown>;
   created_at: Date;
   updated_at: Date;
@@ -186,6 +208,7 @@ export interface CreateMemoryDto {
   tags?: string[];
   language?: string;
   pinned?: boolean;
+  is_shared?: boolean;
   project_id?: string;
   session_id?: string;
   metadata?: Record<string, unknown>;
@@ -199,6 +222,7 @@ export interface UpdateMemoryDto {
   importance?: number;
   tags?: string[];
   pinned?: boolean;
+  is_shared?: boolean;
   metadata?: Record<string, unknown>;
 }
 

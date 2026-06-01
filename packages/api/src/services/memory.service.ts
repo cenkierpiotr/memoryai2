@@ -1,6 +1,7 @@
 import { query, withTransaction } from '../db/pool.js';
 import { embeddingService } from './embedding.service.js';
 import { contextBundleService } from './context-bundle.service.js';
+import { encrypt, decrypt, isEncrypted } from '../utils/encryption.js';
 import type {
   Memory, MemorySearchResult, CoreMemory,
   CreateMemoryDto, UpdateMemoryDto, SearchMemoriesDto,
@@ -8,43 +9,66 @@ import type {
 } from '@memoryai/shared';
 
 const MEMORY_COLS = `id, user_id, project_id, session_id, tier, category, type, content,
-  importance, tags, language, pinned, metadata,
+  importance, tags, language, pinned, is_shared, metadata,
   created_at, updated_at, last_accessed, access_count`;
+
+// Categories that are automatically shared across all projects
+const AUTO_SHARED_CATEGORIES: MemoryCategory[] = ['credentials', 'infrastructure', 'shared_config'];
+// Categories whose content is encrypted at rest
+const ENCRYPTED_CATEGORIES: MemoryCategory[] = ['credentials'];
+
+function prepareContent(content: string, category: MemoryCategory): string {
+  return ENCRYPTED_CATEGORIES.includes(category) ? encrypt(content) : content;
+}
+
+function decryptContent(memory: Memory): Memory {
+  if (isEncrypted(memory.content)) {
+    return { ...memory, content: decrypt(memory.content) };
+  }
+  return memory;
+}
+
+function decryptResults<T extends Memory>(rows: T[]): T[] {
+  return rows.map(r => (isEncrypted(r.content) ? { ...r, content: decrypt(r.content) } : r));
+}
 
 export const memoryService = {
   async create(userId: string, dto: CreateMemoryDto): Promise<Memory> {
-    const embedding = await embeddingService.embed(dto.content);
+    const category = (dto.category ?? 'general') as MemoryCategory;
+    const isShared = dto.is_shared ?? AUTO_SHARED_CATEGORIES.includes(category);
+    const content = prepareContent(dto.content, category);
+    const embedding = await embeddingService.embed(dto.content); // embed plaintext
     const vectorLiteral = embeddingService.toVectorLiteral(embedding);
 
     const res = await query<Memory>(
       `INSERT INTO memories
          (user_id, project_id, session_id, tier, category, type, content,
-          importance, tags, language, pinned, metadata, embedding)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::vector)
+          importance, tags, language, pinned, is_shared, metadata, embedding)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::vector)
        RETURNING ${MEMORY_COLS}`,
       [
         userId,
         dto.project_id ?? null,
         dto.session_id ?? null,
         dto.tier ?? 'warm',
-        dto.category ?? 'general',
+        category,
         dto.type ?? 'fact',
-        dto.content,
+        content,
         dto.importance ?? 0.5,
         dto.tags ?? [],
         dto.language ?? 'auto',
         dto.pinned ?? false,
+        isShared,
         JSON.stringify(dto.metadata ?? {}),
         vectorLiteral,
       ]
     );
 
-    // Invalidate Redis cache if tier affects bundle
-    if (res.rows[0].tier === 'core' || res.rows[0].tier === 'hot') {
+    if (res.rows[0].tier === 'core' || res.rows[0].tier === 'hot' || isShared) {
       contextBundleService.invalidate(userId).catch(() => {});
     }
 
-    return res.rows[0];
+    return decryptContent(res.rows[0]);
   },
 
   async createBatch(userId: string, items: CreateMemoryDto[]): Promise<Memory[]> {
@@ -57,31 +81,35 @@ export const memoryService = {
       const result: Memory[] = [];
       for (let i = 0; i < items.length; i++) {
         const dto = items[i];
+        const category = (dto.category ?? 'general') as MemoryCategory;
+        const isShared = dto.is_shared ?? AUTO_SHARED_CATEGORIES.includes(category);
+        const content = prepareContent(dto.content, category);
         const vectorLiteral = embeddingService.toVectorLiteral(embeddings[i]);
         const res = await client.query<Memory>(
           `INSERT INTO memories
              (user_id, project_id, session_id, tier, category, type, content,
-              importance, tags, language, pinned, metadata, embedding)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::vector)
+              importance, tags, language, pinned, is_shared, metadata, embedding)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::vector)
            RETURNING ${MEMORY_COLS}`,
           [
             userId,
             dto.project_id ?? null,
             dto.session_id ?? null,
             dto.tier ?? 'warm',
-            dto.category ?? 'general',
+            category,
             dto.type ?? 'fact',
-            dto.content,
+            content,
             dto.importance ?? 0.5,
             dto.tags ?? [],
             dto.language ?? 'auto',
             dto.pinned ?? false,
+            isShared,
             JSON.stringify(dto.metadata ?? {}),
             vectorLiteral,
           ]
         );
-        result.push(res.rows[0]);
-        if (res.rows[0].tier === 'core' || res.rows[0].tier === 'hot') {
+        result.push(decryptContent(res.rows[0]));
+        if (res.rows[0].tier === 'core' || res.rows[0].tier === 'hot' || isShared) {
           invalidateBundle = true;
         }
       }
@@ -128,8 +156,7 @@ export const memoryService = {
       ]
     );
 
-    // Restore user_id (excluded from function for performance)
-    const results = res.rows.map(r => ({ ...r, user_id: userId }));
+    const results = decryptResults(res.rows.map(r => ({ ...r, user_id: userId })));
 
     // Update access stats async (triggers auto-promotion to hot tier)
     if (results.length > 0) {
@@ -160,7 +187,7 @@ export const memoryService = {
       `SELECT ${MEMORY_COLS} FROM memories WHERE id = $1 AND user_id = $2`,
       [id, userId]
     );
-    return res.rows[0] ?? null;
+    return res.rows[0] ? decryptContent(res.rows[0]) : null;
   },
 
   async list(userId: string, pagination: PaginationQuery & {
@@ -198,7 +225,7 @@ export const memoryService = {
     ]);
 
     return {
-      data: dataRes.rows,
+      data: decryptResults(dataRes.rows),
       total: parseInt(countRes.rows[0].count, 10),
     };
   },
@@ -209,17 +236,28 @@ export const memoryService = {
     let idx = 1;
 
     if (dto.content !== undefined) {
-      const embedding = await embeddingService.embed(dto.content);
+      const existing = await this.findById(userId, id);
+      const category = (dto.category ?? existing?.category ?? 'general') as MemoryCategory;
+      const encryptedContent = prepareContent(dto.content, category);
+      const embedding = await embeddingService.embed(dto.content); // embed plaintext
       const vectorLiteral = embeddingService.toVectorLiteral(embedding);
       sets.push(`content = $${idx++}`, `embedding = $${idx++}::vector`);
-      params.push(dto.content, vectorLiteral);
+      params.push(encryptedContent, vectorLiteral);
     }
     if (dto.type !== undefined) { sets.push(`type = $${idx++}`); params.push(dto.type); }
     if (dto.tier !== undefined) { sets.push(`tier = $${idx++}`); params.push(dto.tier); }
-    if (dto.category !== undefined) { sets.push(`category = $${idx++}`); params.push(dto.category); }
+    if (dto.category !== undefined) {
+      const cat = dto.category as MemoryCategory;
+      sets.push(`category = $${idx++}`); params.push(cat);
+      // Auto-update is_shared when category changes to a shared category
+      if (AUTO_SHARED_CATEGORIES.includes(cat)) {
+        sets.push(`is_shared = TRUE`);
+      }
+    }
     if (dto.importance !== undefined) { sets.push(`importance = $${idx++}`); params.push(dto.importance); }
     if (dto.tags !== undefined) { sets.push(`tags = $${idx++}`); params.push(dto.tags); }
     if (dto.pinned !== undefined) { sets.push(`pinned = $${idx++}`); params.push(dto.pinned); }
+    if (dto.is_shared !== undefined) { sets.push(`is_shared = $${idx++}`); params.push(dto.is_shared); }
     if (dto.metadata !== undefined) { sets.push(`metadata = $${idx++}`); params.push(JSON.stringify(dto.metadata)); }
 
     if (sets.length === 0) return this.findById(userId, id);
@@ -236,7 +274,7 @@ export const memoryService = {
       contextBundleService.invalidate(userId).catch(() => {});
     }
 
-    return res.rows[0] ?? null;
+    return res.rows[0] ? decryptContent(res.rows[0]) : null;
   },
 
   async delete(userId: string, id: string): Promise<boolean> {

@@ -14,6 +14,7 @@ import { entityService } from '../services/entity.service.js';
 import { sessionService } from '../services/session.service.js';
 import { authService } from '../services/auth.service.js';
 import { contextBundleService } from '../services/context-bundle.service.js';
+import { projectService } from '../services/project.service.js';
 import type { MemoryType, MemoryCategory } from '@memoryai/shared';
 
 // ── MCP Protocol Types ──────────────────────────────────────
@@ -60,9 +61,13 @@ Pass force_reload=true only if the user explicitly asks to refresh their memory 
           items: { type: 'string' },
           description: 'Key topics or keywords from the current conversation. Extract 3-5 main themes for semantic search.',
         },
+        project_name: {
+          type: 'string',
+          description: 'Project name or ANY alias — e.g. "memoryai", "memory-ai", "the pgvector project", "cenkierpiotr/memoryai". System auto-resolves to the correct project. Prefer this over project_id.',
+        },
         project_id: {
           type: 'string',
-          description: 'Optional project UUID to filter memories to a specific project.',
+          description: 'Optional project UUID (use project_name instead when possible).',
         },
         limit: {
           type: 'number',
@@ -71,11 +76,11 @@ Pass force_reload=true only if the user explicitly asks to refresh their memory 
         categories: {
           type: 'array',
           items: { type: 'string' },
-          description: 'Narrow Phase 2 to specific categories to reduce token usage. Coding conversations: ["technical_stack","active_project","decisions"]. General: ["user_profile","preferences","workflow"].',
+          description: 'Narrow Phase 2 to specific categories to reduce token usage. Coding: ["technical_stack","active_project","decisions","infrastructure"]. General: ["user_profile","preferences","workflow"]. Credentials/config: ["credentials","infrastructure","shared_config"].',
         },
         force_reload: {
           type: 'boolean',
-          description: 'Set true to reload context even if it was already loaded recently in this session.',
+          description: 'Set true to reload context even if already loaded recently in this session.',
         },
       },
       required: ['topics'],
@@ -105,8 +110,12 @@ Choose the correct tier and category to ensure fast retrieval: use tier=core for
         },
         category: {
           type: 'string',
-          enum: ['user_profile','meta_instructions','active_project','technical_stack','preferences','workflow','domain_knowledge','decisions','constraints','relationships','temporal','archive','general'],
-          description: 'Semantic category for organized retrieval. Choose the most specific matching category.',
+          enum: ['user_profile','meta_instructions','active_project','technical_stack','preferences','workflow','domain_knowledge','decisions','constraints','relationships','temporal','archive','infrastructure','credentials','shared_config','general'],
+          description: 'Semantic category. infrastructure=servers/IPs/network config, credentials=API keys/tokens (auto-encrypted+shared), shared_config=config reused across projects. These 3 are auto-shared across all projects.',
+        },
+        is_shared: {
+          type: 'boolean',
+          description: 'Make this memory visible across ALL projects. Auto-set true for categories: credentials, infrastructure, shared_config. Use for any info needed in multiple projects.',
         },
         importance: {
           type: 'number',
@@ -255,19 +264,29 @@ async function handleTool(
 
       const topics = (args.topics as string[]).join(' ');
       const limit = Math.min((args.limit as number | undefined) ?? 7, 20);
-      const projectId = args.project_id as string | undefined;
+
+      // Resolve project_name (any alias) to UUID
+      let projectId = args.project_id as string | undefined;
+      const projectName = args.project_name as string | undefined;
+      if (projectName && !projectId) {
+        const resolved = await projectService.resolveByName(userId, projectName);
+        if (resolved) projectId = resolved;
+      }
+
       const validCategories: MemoryCategory[] = [
         'user_profile','meta_instructions','active_project','technical_stack',
         'preferences','workflow','domain_knowledge','decisions','constraints',
-        'relationships','temporal','archive','general',
+        'relationships','temporal','archive','infrastructure','credentials','shared_config','general',
       ];
       const rawCats = Array.isArray(args.categories) ? args.categories as string[] : undefined;
       const categories = rawCats?.filter(c => validCategories.includes(c as MemoryCategory)) as MemoryCategory[] | undefined;
 
-      // ── Phase 1: instant core context (no vector, Redis-cached) ──
-      // ── Phase 2: semantic search hot+warm tiers (parallel) ───────
-      const [bundle, topicMemories, topicEntities] = await Promise.all([
+      // ── Phase 1a: global + shared core context (Redis-cached) ────
+      // ── Phase 1b: project-specific core (if project known) ───────
+      // ── Phase 2:  semantic search hot+warm (parallel) ─────────────
+      const [bundle, projectCore, topicMemories, topicEntities] = await Promise.all([
         contextBundleService.get(userId),
+        projectId ? memoryService.getCoreContext(userId, projectId, 10) : Promise.resolve([]),
         memoryService.search(userId, {
           query: topics,
           limit,
@@ -277,11 +296,12 @@ async function handleTool(
         entityService.search(userId, topics, 4),
       ]);
 
-      const coreText = contextBundleService.formatForModel(bundle, projectId);
-      const hasCore = coreText.trim().length > 0;
+      const globalCoreText = contextBundleService.formatForModel(bundle, projectId);
+      const hasGlobalCore = globalCoreText.trim().length > 0;
+      const hasProjectCore = projectCore.length > 0;
       const hasTopicMemories = topicMemories.length > 0 || topicEntities.length > 0;
 
-      if (!hasCore && !hasTopicMemories) {
+      if (!hasGlobalCore && !hasProjectCore && !hasTopicMemories) {
         return {
           content: [{ type: 'text', text: 'No memories yet. Start building context by saving important facts with memory_save.' }],
         };
@@ -289,19 +309,30 @@ async function handleTool(
 
       const lines: string[] = ['[MEMORY]'];
 
-      if (hasCore) {
-        lines.push(coreText);
+      if (hasGlobalCore) {
+        lines.push(globalCoreText);
+      }
+
+      if (hasProjectCore) {
+        if (hasGlobalCore) lines.push('');
+        lines.push(`[PROJECT: ${projectName ?? projectId}]`);
+        for (const m of projectCore) {
+          const cat = m.category !== 'general' ? `[${m.category}] ` : '';
+          const content = m.content.length > 200 ? m.content.slice(0, 199) + '…' : m.content;
+          lines.push(`${cat}${content}`);
+        }
       }
 
       if (topicMemories.length > 0) {
-        if (hasCore) lines.push('');
+        lines.push('');
         lines.push('[TOPIC]');
         for (const m of topicMemories) {
           const date = new Date(m.created_at).toLocaleDateString('pl-PL');
           const hot = m.tier === 'hot' ? '★ ' : '';
+          const shared = m.is_shared ? '⬡ ' : '';
           const cat = m.category !== 'general' ? `[${m.category}] ` : '';
           const content = m.content.length > 200 ? m.content.slice(0, 199) + '…' : m.content;
-          lines.push(`• ${hot}${cat}${content} (${date})`);
+          lines.push(`• ${hot}${shared}${cat}${content} (${date})`);
         }
       }
 
@@ -331,7 +362,7 @@ async function handleTool(
       const validCategories2: MemoryCategory[] = [
         'user_profile','meta_instructions','active_project','technical_stack',
         'preferences','workflow','domain_knowledge','decisions','constraints',
-        'relationships','temporal','archive','general',
+        'relationships','temporal','archive','infrastructure','credentials','shared_config','general',
       ];
 
       const rawType = args.type as string | undefined;
@@ -345,6 +376,13 @@ async function handleTool(
       const memCategory: MemoryCategory = rawCat && validCategories2.includes(rawCat as MemoryCategory)
         ? (rawCat as MemoryCategory) : 'general';
 
+      // Resolve project_name to UUID for save as well
+      let saveProjectId = typeof args.project_id === 'string' ? args.project_id : undefined;
+      if (!saveProjectId && typeof args.project_name === 'string') {
+        const resolved = await projectService.resolveByName(userId, args.project_name as string);
+        if (resolved) saveProjectId = resolved;
+      }
+
       const memory = await memoryService.create(userId, {
         content: args.content as string,
         type: memType,
@@ -352,12 +390,15 @@ async function handleTool(
         category: memCategory,
         importance: typeof args.importance === 'number' ? Math.max(0, Math.min(1, args.importance)) : undefined,
         tags: Array.isArray(args.tags) ? (args.tags as string[]).slice(0, 20) : undefined,
-        project_id: typeof args.project_id === 'string' ? args.project_id : undefined,
+        is_shared: typeof args.is_shared === 'boolean' ? args.is_shared : undefined,
+        project_id: saveProjectId,
       });
+      const sharedLabel = memory.is_shared ? ', shared: ✓' : '';
+      const encLabel = memCategory === 'credentials' ? ', encrypted: ✓' : '';
       return {
         content: [{
           type: 'text',
-          text: `Memory saved ✓ (id: ${memory.id}, tier: ${memory.tier}, category: ${memory.category}, type: ${memory.type}, importance: ${memory.importance})`,
+          text: `Memory saved ✓ (id: ${memory.id}, tier: ${memory.tier}, category: ${memory.category}, type: ${memory.type}, importance: ${memory.importance}${sharedLabel}${encLabel})`,
         }],
       };
     }

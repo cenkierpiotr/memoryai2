@@ -44,11 +44,13 @@ if [[ ! -f .env ]]; then
   ADMIN_API_KEY=$(openssl rand -hex 32)
   POSTGRES_PASSWORD=$(openssl rand -hex 16)
   REDIS_PASSWORD=$(openssl rand -hex 16)
+  ENCRYPTION_KEY=$(openssl rand -hex 32)
 
   sed -i "s/change_me_jwt_secret_min_32_chars_long/$JWT_SECRET/" .env
   sed -i "s/change_me_admin_api_key/$ADMIN_API_KEY/" .env
   sed -i "s/change_me_strong_password/$POSTGRES_PASSWORD/g" .env
   sed -i "s/change_me_redis_password/$REDIS_PASSWORD/g" .env
+  sed -i "s/change_me_encryption_key/$ENCRYPTION_KEY/" .env
 
   # Update DATABASE_URL and REDIS_URL with new passwords
   sed -i "s|postgresql://memoryai:change_me_strong_password|postgresql://memoryai:$POSTGRES_PASSWORD|g" .env
