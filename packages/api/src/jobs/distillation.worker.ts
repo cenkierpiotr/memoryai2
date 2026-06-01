@@ -11,7 +11,7 @@ import { sessionService } from '../services/session.service.js';
 import { memoryService } from '../services/memory.service.js';
 import { config } from '../config.js';
 import { query } from '../db/pool.js';
-import type { CreateMemoryDto, MemoryType } from '@memoryai/shared';
+import type { CreateMemoryDto, MemoryType, MemoryTier, MemoryCategory } from '@memoryai/shared';
 
 // ── LLM Providers ───────────────────────────────────────────
 
@@ -98,41 +98,53 @@ async function callLLM(prompt: string): Promise<string> {
 
 // ── Distillation Logic ──────────────────────────────────────
 
-const DISTILLATION_PROMPT = (conversation: string) => `You are a memory extraction system. Analyze this conversation and extract important information that should be remembered for future sessions.
+const DISTILLATION_PROMPT = (conversation: string) => `You are a memory extraction system. Analyze this conversation and extract important information for future sessions.
 
 CONVERSATION:
 ${conversation}
 
-Extract memories in JSON format. Return ONLY valid JSON, no other text.
+Return ONLY valid JSON, no other text.
 
 Format:
 {
   "memories": [
     {
-      "content": "Complete, self-contained statement of the fact/decision/preference",
+      "content": "Concise self-contained fact (max 150 chars)",
       "type": "fact|decision|preference|instruction|entity_relation|summary",
+      "tier": "core|hot|warm",
+      "category": "user_profile|meta_instructions|active_project|technical_stack|preferences|workflow|domain_knowledge|decisions|constraints|relationships|temporal|general",
       "importance": 0.0-1.0
     }
   ]
 }
 
 Rules:
-- Each memory must be self-contained (understandable without the conversation)
-- Use high importance (0.8-1.0) for: decisions made, instructions given, critical preferences
-- Use medium importance (0.5-0.7) for: general facts, background info
-- Use low importance (0.3-0.4) for: minor details
-- Skip pleasantries, greetings, and trivial content
-- Maximum 20 memories per session
-- Write in the same language as the conversation
-- For decisions: "Decided to use X instead of Y because Z"
-- For preferences: "User prefers X over Y"
-- For instructions: "Always do X when Y"
-- Include a summary type memory if conversation was substantial`;
+- content: max 150 characters, dense and self-contained. Omit filler words.
+- tier: core=user identity/standing rules, hot=active project/recent decisions, warm=general facts
+- category: choose the most specific match from the enum list
+- importance: 0.9-1.0=critical rules/decisions, 0.7-0.8=important facts, 0.5-0.6=context, 0.3-0.4=minor
+- Skip greetings, pleasantries, and trivial content
+- Maximum 15 memories per session
+- Write content in the same language as the conversation
+- Decision pattern: "Chose X over Y — reason"
+- Preference pattern: "Prefers X over Y"
+- Instruction pattern: "Always X when Y"
+- Include one summary memory if conversation covered multiple topics`;
+
+const VALID_TYPES: MemoryType[] = ['fact', 'decision', 'preference', 'instruction', 'entity_relation', 'summary'];
+const VALID_TIERS: MemoryTier[] = ['core', 'hot', 'warm', 'cold'];
+const VALID_CATEGORIES: MemoryCategory[] = [
+  'user_profile','meta_instructions','active_project','technical_stack',
+  'preferences','workflow','domain_knowledge','decisions','constraints',
+  'relationships','temporal','archive','general',
+];
 
 interface DistillationResult {
   memories: Array<{
     content: string;
     type: string;
+    tier?: string;
+    category?: string;
     importance: number;
   }>;
 }
@@ -167,10 +179,12 @@ async function distillSession(sessionId: string, userId: string): Promise<number
   const session = await sessionService.findByIdAny(sessionId);
   const dtos: CreateMemoryDto[] = result.memories
     .filter(m => m.content?.length > 10)
-    .slice(0, 20)
+    .slice(0, 15)
     .map(m => ({
-      content: m.content,
-      type: (m.type as MemoryType) || 'fact',
+      content: m.content.slice(0, 500),
+      type: VALID_TYPES.includes(m.type as MemoryType) ? (m.type as MemoryType) : 'fact',
+      tier: VALID_TIERS.includes(m.tier as MemoryTier) ? (m.tier as MemoryTier) : 'warm',
+      category: VALID_CATEGORIES.includes(m.category as MemoryCategory) ? (m.category as MemoryCategory) : 'general',
       importance: Math.max(0, Math.min(1, m.importance ?? 0.5)),
       session_id: sessionId,
       project_id: session?.project_id,

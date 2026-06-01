@@ -30,6 +30,9 @@ redis.on('error', (err) => {
 
 const BUNDLE_TTL_SECONDS = 300; // 5 minutes
 const BUNDLE_KEY = (userId: string) => `memoryai:bundle:${userId}`;
+const CTX_LOADED_KEY = (userId: string) => `memoryai:ctx_loaded:${userId}`;
+const CTX_LOADED_TTL = 1200; // 20 minutes — lazy-load window
+const MAX_CONTENT_DISPLAY = 200; // chars per memory line in formatted output
 
 export const contextBundleService = {
   /**
@@ -125,34 +128,56 @@ export const contextBundleService = {
   },
 
   /**
-   * Format the bundle into readable text for injection into the model context.
-   * Called by the MCP server's memory_get_context tool.
+   * Format the bundle into compact text for injection into model context.
+   * Truncates long content, skips empty scaffolds, avoids decorative borders.
    */
   formatForModel(bundle: ContextBundle, projectId?: string): string {
     const lines: string[] = [];
 
+    const truncate = (s: string) =>
+      s.length > MAX_CONTENT_DISPLAY ? s.slice(0, MAX_CONTENT_DISPLAY - 1) + '…' : s;
+
     if (bundle.core_memories.length > 0) {
-      lines.push('── CORE CONTEXT (always relevant) ──────────────────');
       for (const m of bundle.core_memories) {
-        // Skip setup scaffolding that hasn't been filled yet
-        if (m.content.includes('Not yet populated') || m.content.includes('Not yet determined')) {
-          continue;
-        }
-        const category = m.category !== 'general' ? `[${m.category.replace('_', ' ').toUpperCase()}] ` : '';
-        lines.push(`${category}${m.content}`);
+        if (m.content.includes('Not yet populated') || m.content.includes('Not yet determined')) continue;
+        const cat = m.category !== 'general' ? `[${m.category}] ` : '';
+        lines.push(`${cat}${truncate(m.content)}`);
       }
     }
 
     if (bundle.key_entities.length > 0) {
-      lines.push('');
-      lines.push('── KEY ENTITIES ─────────────────────────────────────');
+      if (lines.length > 0) lines.push('');
       for (const e of bundle.key_entities) {
-        const facts = e.facts.slice(0, 3).map(f => `  • ${typeof f === 'string' ? f : f.content}`).join('\n');
+        const facts = e.facts.slice(0, 2).map(f => `  • ${truncate(typeof f === 'string' ? f : f.content)}`).join('\n');
         lines.push(`${e.name} (${e.type}):\n${facts}`);
       }
     }
 
     return lines.join('\n');
+  },
+
+  // ── Session-level lazy-load tracking ────────────────────────
+
+  async isContextLoadedRecently(userId: string): Promise<number | null> {
+    try {
+      const val = await redis.get(CTX_LOADED_KEY(userId));
+      if (!val) return null;
+      return Math.round((Date.now() - parseInt(val, 10)) / 60000);
+    } catch {
+      return null;
+    }
+  },
+
+  async markContextLoaded(userId: string): Promise<void> {
+    try {
+      await redis.setex(CTX_LOADED_KEY(userId), CTX_LOADED_TTL, Date.now().toString());
+    } catch {}
+  },
+
+  async clearContextLoaded(userId: string): Promise<void> {
+    try {
+      await redis.del(CTX_LOADED_KEY(userId));
+    } catch {}
   },
 
   /**

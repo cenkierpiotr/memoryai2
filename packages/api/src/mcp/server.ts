@@ -47,31 +47,35 @@ interface McpResponse {
 const TOOLS: McpTool[] = [
   {
     name: 'memory_get_context',
-    description: `ALWAYS call this tool at the very beginning of every conversation, before your first response.
-Uses 2-phase retrieval: Phase 1 loads core context instantly (user profile, instructions, key preferences — no vector needed).
-Phase 2 does semantic search for topic-specific memories from hot+warm tiers.
-Returns structured context with both always-relevant facts and topic-specific memories from past sessions.
-The user should never need to repeat what was already established.`,
+    description: `Call this tool ONCE at the very beginning of each new conversation, before your first response.
+Do NOT call it again within the same conversation — use memory_search for specific follow-up lookups instead.
+Uses 2-phase retrieval: Phase 1 loads core context instantly (user profile, instructions, key preferences).
+Phase 2 does semantic search for topic-specific memories relevant to the current conversation topics.
+Pass force_reload=true only if the user explicitly asks to refresh their memory context.`,
     inputSchema: {
       type: 'object',
       properties: {
         topics: {
           type: 'array',
           items: { type: 'string' },
-          description: 'Key topics, questions, or keywords from the current conversation. Extract 3-5 main themes for Phase 2 semantic search.',
+          description: 'Key topics or keywords from the current conversation. Extract 3-5 main themes for semantic search.',
         },
         project_id: {
           type: 'string',
-          description: 'Optional project UUID to filter memories to a specific project context.',
+          description: 'Optional project UUID to filter memories to a specific project.',
         },
         limit: {
           type: 'number',
-          description: 'Maximum topic-specific memories to retrieve in Phase 2 (default: 10, max: 20). Core memories are always loaded.',
+          description: 'Maximum topic-specific memories to retrieve (default: 7, max: 20).',
         },
         categories: {
           type: 'array',
           items: { type: 'string' },
-          description: 'Optional: filter Phase 2 search to specific categories (e.g., ["decisions", "technical_stack", "active_project"]).',
+          description: 'Narrow Phase 2 to specific categories to reduce token usage. Coding conversations: ["technical_stack","active_project","decisions"]. General: ["user_profile","preferences","workflow"].',
+        },
+        force_reload: {
+          type: 'boolean',
+          description: 'Set true to reload context even if it was already loaded recently in this session.',
         },
       },
       required: ['topics'],
@@ -234,8 +238,23 @@ async function handleTool(
 ): Promise<unknown> {
   switch (toolName) {
     case 'memory_get_context': {
+      const forceReload = args.force_reload === true;
+
+      // ── Lazy loading: skip full retrieval if already loaded recently ──
+      if (!forceReload) {
+        const loadedMinutesAgo = await contextBundleService.isContextLoadedRecently(userId);
+        if (loadedMinutesAgo !== null) {
+          return {
+            content: [{
+              type: 'text',
+              text: `Memory context loaded ${loadedMinutesAgo}min ago — already in context. Use memory_search for specific topic lookups.`,
+            }],
+          };
+        }
+      }
+
       const topics = (args.topics as string[]).join(' ');
-      const limit = Math.min((args.limit as number | undefined) ?? 10, 20);
+      const limit = Math.min((args.limit as number | undefined) ?? 7, 20);
       const projectId = args.project_id as string | undefined;
       const validCategories: MemoryCategory[] = [
         'user_profile','meta_instructions','active_project','technical_stack',
@@ -255,7 +274,7 @@ async function handleTool(
           project_id: projectId,
           categories,
         }),
-        entityService.search(userId, topics, 5),
+        entityService.search(userId, topics, 4),
       ]);
 
       const coreText = contextBundleService.formatForModel(bundle, projectId);
@@ -264,45 +283,44 @@ async function handleTool(
 
       if (!hasCore && !hasTopicMemories) {
         return {
-          content: [{ type: 'text', text: 'No memories found yet. This appears to be a new user or the first conversation on this topic. Introduce yourself and start building context.' }],
+          content: [{ type: 'text', text: 'No memories yet. Start building context by saving important facts with memory_save.' }],
         };
       }
 
-      const lines: string[] = ['=== PERSISTENT MEMORY CONTEXT ===', ''];
+      const lines: string[] = ['[MEMORY]'];
 
-      // Phase 1 output
       if (hasCore) {
         lines.push(coreText);
-        lines.push('');
       }
 
-      // Phase 2 output — topic-specific memories
       if (topicMemories.length > 0) {
-        lines.push('── TOPIC-SPECIFIC MEMORIES ──────────────────────────');
+        if (hasCore) lines.push('');
+        lines.push('[TOPIC]');
         for (const m of topicMemories) {
           const date = new Date(m.created_at).toLocaleDateString('pl-PL');
-          const tierLabel = m.tier === 'hot' ? ' ★' : '';
-          const catLabel = m.category !== 'general' ? ` [${m.category.replace('_', ' ')}]` : '';
-          lines.push(`•${tierLabel}${catLabel} ${m.content}  (${date}, score: ${m.combined_score.toFixed(2)})`);
+          const hot = m.tier === 'hot' ? '★ ' : '';
+          const cat = m.category !== 'general' ? `[${m.category}] ` : '';
+          const content = m.content.length > 200 ? m.content.slice(0, 199) + '…' : m.content;
+          lines.push(`• ${hot}${cat}${content} (${date})`);
         }
-        lines.push('');
       }
 
-      // Entity context
       if (topicEntities.length > 0) {
-        lines.push('── RELEVANT ENTITIES ────────────────────────────────');
+        lines.push('');
+        lines.push('[ENTITIES]');
         for (const e of topicEntities) {
           const facts = (e.facts as Array<{ content: string }>)
-            .slice(0, 4)
-            .map(f => `  • ${f.content}`)
+            .slice(0, 3)
+            .map(f => `  • ${f.content.length > 150 ? f.content.slice(0, 149) + '…' : f.content}`)
             .join('\n');
           lines.push(`${e.name} (${e.type}):\n${facts}`);
         }
-        lines.push('');
       }
 
-      lines.push('=== END OF MEMORY CONTEXT ===');
-      lines.push('Use this context. Do not ask the user for information already present here.');
+      lines.push('[/MEMORY]');
+
+      // Mark context as loaded for lazy-load TTL
+      await contextBundleService.markContextLoaded(userId);
 
       return { content: [{ type: 'text', text: lines.join('\n') }] };
     }
@@ -417,10 +435,13 @@ async function handleTool(
         });
       }
 
+      // Clear lazy-load flag so next conversation gets a fresh full context load
+      await contextBundleService.clearContextLoaded(userId);
+
       return {
         content: [{
           type: 'text',
-          text: 'Session closed. Memories will be distilled in the background and available in your next conversation.',
+          text: 'Session closed. Memories will be distilled and available in your next conversation.',
         }],
       };
     }
