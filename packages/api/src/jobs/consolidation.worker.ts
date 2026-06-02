@@ -169,6 +169,22 @@ async function consolidateMemory(memId: string, userId: string): Promise<void> {
   );
 }
 
+// ── Importance decay ────────────────────────────────────────
+
+async function runImportanceDecay(): Promise<void> {
+  const result = await query<{ id: string }>(
+    `UPDATE memories
+     SET tier = 'warm', updated_at = NOW()
+     WHERE tier = 'hot'
+       AND last_accessed_at < NOW() - INTERVAL '30 days'
+       AND pinned = FALSE
+     RETURNING id`
+  );
+  if (result.rows.length > 0) {
+    process.stderr.write(`[importance-decay] demoted ${result.rows.length} hot → warm memories\n`);
+  }
+}
+
 // ── Scheduled checker ───────────────────────────────────────
 
 let consolidationInterval: NodeJS.Timeout | null = null;
@@ -194,6 +210,10 @@ export async function scheduleConsolidationCheck(): Promise<void> {
       if (due.rows.length > 0) {
         process.stderr.write(`[consolidation] processed ${due.rows.length} temporal memories\n`);
       }
+
+      await runImportanceDecay().catch((err: Error) => {
+        process.stderr.write(`[importance-decay] failed: ${err.message}\n`);
+      });
     } catch (err) {
       process.stderr.write(`[consolidation] check failed: ${(err as Error).message}\n`);
     }

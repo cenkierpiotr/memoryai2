@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { requireAuth } from '../middleware/auth.middleware.js';
 import { memoryService } from '../services/memory.service.js';
 import { contextBundleService } from '../services/context-bundle.service.js';
+import { memoriesSavedTotal, memoriesSearchTotal, searchLatency } from '../metrics.js';
 
 const TYPES = ['fact', 'decision', 'preference', 'instruction', 'entity_relation', 'summary'] as const;
 const TIERS = ['core', 'hot', 'warm', 'cold'] as const;
@@ -75,7 +76,10 @@ export async function memoriesRoutes(app: FastifyInstance): Promise<void> {
   // POST /memories/search  — semantic search (phase 2)
   app.post('/memories/search', async (req, reply) => {
     const body = searchSchema.parse(req.body);
+    const end = searchLatency.startTimer();
     const results = await memoryService.search(req.user.id, body);
+    end();
+    memoriesSearchTotal.inc();
     return reply.send({ data: results, meta: { total: results.length } });
   });
 
@@ -112,6 +116,7 @@ export async function memoriesRoutes(app: FastifyInstance): Promise<void> {
   app.post('/memories', async (req, reply) => {
     const body = createSchema.parse(req.body);
     const memory = await memoryService.create(req.user.id, body);
+    memoriesSavedTotal.inc({ category: memory.category, tier: memory.tier });
     return reply.code(201).send({ data: memory });
   });
 

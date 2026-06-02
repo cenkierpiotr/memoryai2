@@ -9,6 +9,7 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { config, validateConfig } from './config.js';
 import { pool } from './db/pool.js';
+import { runMigrations } from './db/migrate.js';
 import { authService } from './services/auth.service.js';
 import { memoriesRoutes } from './routes/memories.route.js';
 import { sessionsRoutes } from './routes/sessions.route.js';
@@ -19,6 +20,7 @@ import { mcpRoutes } from './mcp/server.js';
 import { startDistillationWorker, scheduleStaleSessionCheck, stopStaleSessionCheck } from './jobs/distillation.worker.js';
 import { scheduleConsolidationCheck, stopConsolidationCheck } from './jobs/consolidation.worker.js';
 import { scheduleDeduplication, stopDeduplication } from './jobs/deduplication.worker.js';
+import { registry } from './metrics.js';
 
 const app = Fastify({
   logger: {
@@ -67,6 +69,13 @@ try {
     decorateReply: false,
   });
   app.get('/dashboard', (_req, reply) => reply.redirect('/dashboard/'));
+  // SPA fallback — any unmatched /dashboard/* path serves index.html
+  app.setNotFoundHandler((req, reply) => {
+    if (req.url.startsWith('/dashboard/')) {
+      return reply.sendFile('index.html', dashboardDist);
+    }
+    reply.code(404).send({ error: 'Not Found', statusCode: 404 });
+  });
 } catch {
   app.log.warn('Dashboard static files not found — skipping (run: npm run build -w packages/dashboard)');
 }
@@ -78,6 +87,11 @@ app.get('/health', async () => ({
   version: '0.1.0',
   timestamp: new Date().toISOString(),
 }));
+
+app.get('/metrics', async (_req, reply) => {
+  reply.header('Content-Type', registry.contentType);
+  return reply.send(await registry.metrics());
+});
 
 await app.register(memoriesRoutes, { prefix: '/v1' });
 await app.register(sessionsRoutes, { prefix: '/v1' });
@@ -117,6 +131,10 @@ async function start() {
     // Verify DB connection
     await pool.query('SELECT 1');
     app.log.info('Database connected');
+
+    // Run pending schema migrations
+    await runMigrations();
+    app.log.info('Database migrations applied');
 
     // Ensure admin user exists
     await authService.ensureAdminUser();

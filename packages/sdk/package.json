@@ -1,6 +1,7 @@
 {
   "name": "@memoryai/sdk",
   "version": "0.1.0",
+  "description": "TypeScript SDK for MemoryAI — persistent memory for LLMs",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -10,15 +11,28 @@
       "types": "./dist/index.d.ts"
     }
   },
+  "files": [
+    "dist",
+    "README.md"
+  ],
   "scripts": {
     "build": "tsc",
-    "dev": "tsc --watch"
+    "dev": "tsc --watch",
+    "prepublishOnly": "npm run build"
   },
-  "dependencies": {
-    "@memoryai/shared": "*"
+  "keywords": ["memory", "llm", "mcp", "ai", "context"],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/cenkierpiotr/memoryai.git",
+    "directory": "packages/sdk"
   },
+  "dependencies": {},
   "devDependencies": {
     "@types/node": "^22.0.0",
     "typescript": "^5.6.0"
+  },
+  "engines": {
+    "node": ">=20"
   }
 }
