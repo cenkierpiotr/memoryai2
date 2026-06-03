@@ -262,7 +262,8 @@ async function handleTool(
         }
       }
 
-      const topics = (args.topics as string[]).join(' ');
+      const rawTopics = args.topics;
+      const topics = Array.isArray(rawTopics) ? rawTopics.join(' ') : (rawTopics as string) ?? '';
       const limit = Math.min((args.limit as number | undefined) ?? 7, 20);
 
       // Resolve project_name (any alias) to UUID

@@ -148,7 +148,7 @@ export const memoryService = {
       tier: MemoryTier; category: MemoryCategory; recency_score: number;
     }>(
       `SELECT
-         id, content, type, tier, category, importance, tags, language, pinned,
+         id, content, type, tier, category, importance, tags, 'auto'::varchar AS language, pinned,
          metadata, created_at, session_id,
          '' AS user_id, NULL AS project_id, NULL AS updated_at, 0 AS access_count,
          NOW() AS last_accessed,
