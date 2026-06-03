@@ -140,6 +140,7 @@ export const memoryService = {
    * Uses search_memories_v2 with tier boost + recency weighting.
    */
   async search(userId: string, dto: SearchMemoriesDto): Promise<MemorySearchResult[]> {
+    if (!dto.query.trim()) return [];
     const limit = Math.min(dto.limit ?? 10, 20);
     const embedding = await embeddingService.embed(dto.query);
     const vectorLiteral = embeddingService.toVectorLiteral(embedding);
@@ -148,7 +149,7 @@ export const memoryService = {
       tier: MemoryTier; category: MemoryCategory; recency_score: number;
     }>(
       `SELECT
-         id, content, type, tier, category, importance, tags, 'auto'::varchar AS language, pinned,
+         id, content, type, tier, category, importance, tags, 'auto'::varchar AS language, FALSE AS pinned,
          metadata, created_at, session_id,
          '' AS user_id, NULL AS project_id, NULL AS updated_at, 0 AS access_count,
          NOW() AS last_accessed,

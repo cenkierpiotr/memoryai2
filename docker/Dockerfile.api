@@ -28,6 +28,7 @@ COPY --from=builder --chown=memoryai:nodejs /app/packages/api/src/db/migrations 
 COPY --from=builder --chown=memoryai:nodejs /app/packages/api/package.json ./package.json
 COPY --from=builder --chown=memoryai:nodejs /app/node_modules ./node_modules
 COPY --from=builder --chown=memoryai:nodejs /app/packages/dashboard/dist ./dist/dashboard
+COPY --from=builder --chown=memoryai:nodejs /app/install.py ./dist/dashboard/install.py
 
 USER memoryai
 

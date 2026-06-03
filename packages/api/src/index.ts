@@ -80,6 +80,7 @@ try {
   app.log.warn('Dashboard static files not found — skipping (run: npm run build -w packages/dashboard)');
 }
 
+
 // ── Routes ───────────────────────────────────────────────────
 
 app.get('/health', async () => ({

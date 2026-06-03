@@ -55,6 +55,7 @@ export const entityService = {
   },
 
   async search(userId: string, queryText: string, limit = 5): Promise<Entity[]> {
+    if (!queryText.trim()) return [];
     const embedding = await embeddingService.embed(queryText);
     const vectorLiteral = embeddingService.toVectorLiteral(embedding);
 

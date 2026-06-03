@@ -25,7 +25,7 @@ export const distillationQueue = new Queue<DistillationJob>('distillation', {
 export async function addDistillationJob(data: DistillationJob): Promise<Job<DistillationJob>> {
   return distillationQueue.add('distill', data, {
     delay: 5_000,
-    jobId: `distill:${data.sessionId}`,
+    jobId: `distill-${data.sessionId}`,
   });
 }
 
