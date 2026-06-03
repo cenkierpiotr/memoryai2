@@ -406,7 +406,11 @@ RETURNS UUID AS $$
       OR (git_remote IS NOT NULL AND lower(git_remote) LIKE '%' || lower(p_name) || '%')
     )
   ORDER BY
-    CASE WHEN lower(name) = lower(p_name) THEN 0 ELSE 1 END
+    CASE
+      WHEN lower(name) = lower(p_name) THEN 0
+      WHEN lower(p_name) = ANY(SELECT lower(a) FROM unnest(aliases) a) THEN 1
+      ELSE 2
+    END
   LIMIT 1;
 $$ LANGUAGE sql STABLE;
 
