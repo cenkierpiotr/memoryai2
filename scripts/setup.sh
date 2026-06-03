@@ -73,11 +73,11 @@ success "Dependencies installed"
 
 # ── Start Docker services ──────────────────────
 info "Starting PostgreSQL and Redis..."
-docker compose -f docker/docker-compose.yml up -d postgres redis
+docker compose -f docker/docker-compose.yml --env-file "$ROOT_DIR/.env" up -d postgres redis
 
 info "Waiting for PostgreSQL to be ready..."
 RETRIES=30
-until docker compose -f docker/docker-compose.yml exec -T postgres pg_isready -U memoryai -d memoryai >/dev/null 2>&1; do
+until docker compose -f docker/docker-compose.yml --env-file "$ROOT_DIR/.env" exec -T postgres pg_isready -U memoryai -d memoryai >/dev/null 2>&1; do
   ((RETRIES--))
   [[ $RETRIES -eq 0 ]] && error "PostgreSQL failed to start"
   sleep 2
@@ -181,7 +181,7 @@ echo "╚═══════════════════════�
 echo ""
 success "MemoryAI is ready to start!"
 echo ""
-echo "  Start:       docker compose -f docker/docker-compose.yml up"
+echo "  Start:       docker compose -f docker/docker-compose.yml --env-file .env up"
 echo "  API:         http://localhost:${API_PORT}/health"
 echo "  MCP:         http://localhost:${API_PORT}/mcp"
 echo ""
