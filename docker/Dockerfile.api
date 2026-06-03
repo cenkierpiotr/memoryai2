@@ -12,6 +12,7 @@ RUN npm ci --workspace=packages/shared --workspace=packages/api --workspace=pack
 COPY packages/shared ./packages/shared
 COPY packages/api ./packages/api
 COPY packages/dashboard ./packages/dashboard
+COPY install.py ./
 
 RUN npm run build -w packages/shared && \
     npm run build -w packages/api && \
