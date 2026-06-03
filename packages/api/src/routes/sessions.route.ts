@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { requireAuth } from '../middleware/auth.middleware.js';
 import { sessionService } from '../services/session.service.js';
-import { distillationQueue } from '../jobs/distillation.queue.js';
+import { addDistillationJob } from '../jobs/distillation.queue.js';
 
 const createSchema = z.object({
   project_id: z.string().uuid().optional(),
@@ -73,7 +73,7 @@ export async function sessionsRoutes(app: FastifyInstance): Promise<void> {
     if (!session) return reply.code(404).send({ error: 'Not Found', message: 'Session not found or already closed', statusCode: 404 });
 
     // Queue background distillation
-    await distillationQueue.add({ sessionId: id, userId: req.user.id });
+    await addDistillationJob({ sessionId: id, userId: req.user.id });
 
     return reply.send({ data: session, meta: { distillation: 'queued' } });
   });

@@ -1,5 +1,5 @@
 import 'dotenv/config';
-import Fastify from 'fastify';
+import Fastify, { type FastifyError } from 'fastify';
 import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
@@ -102,7 +102,7 @@ await app.register(mcpRoutes);
 
 // ── Error Handler ────────────────────────────────────────────
 
-app.setErrorHandler((err, _req, reply) => {
+app.setErrorHandler((err: FastifyError, _req, reply) => {
   if (err.name === 'ZodError') {
     return reply.code(400).send({
       error: 'Validation Error',

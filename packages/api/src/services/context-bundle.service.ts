@@ -16,7 +16,7 @@
 import { query } from '../db/pool.js';
 import type { ContextBundle, CoreMemoryJson, EntityJson } from '@memoryai/shared';
 import { config } from '../config.js';
-import Redis from 'ioredis';
+import { Redis } from 'ioredis';
 
 const redis = new Redis(config.redis.url, {
   lazyConnect: true,
@@ -24,7 +24,7 @@ const redis = new Redis(config.redis.url, {
   maxRetriesPerRequest: 1,
 });
 
-redis.on('error', (err) => {
+redis.on('error', (err: Error) => {
   process.stderr.write(`[bundle] Redis error: ${err.message}\n`);
 });
 

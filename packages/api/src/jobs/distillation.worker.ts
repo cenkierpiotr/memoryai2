@@ -6,7 +6,7 @@
  */
 
 import { Worker, type Job } from 'bullmq';
-import { connection, type DistillationJob } from './distillation.queue.js';
+import { connection, addDistillationJob, type DistillationJob } from './distillation.queue.js';
 import { sessionService } from '../services/session.service.js';
 import { memoryService } from '../services/memory.service.js';
 import { config } from '../config.js';
@@ -150,7 +150,7 @@ interface DistillationResult {
 }
 
 async function distillSession(sessionId: string, userId: string): Promise<number> {
-  const messages = await sessionService.getMessages(sessionId, 200);
+  const messages = await sessionService.getMessages(userId, sessionId, 200);
   if (messages.length < 2) return 0;
 
   const conversation = messages
@@ -254,7 +254,7 @@ export async function scheduleStaleSessionCheck(): Promise<void> {
         config.distillation.inactivityMinutes
       );
       for (const session of staleSessions) {
-        await distillationQueue.add({ sessionId: session.id, userId: session.user_id });
+        await addDistillationJob({ sessionId: session.id, userId: session.user_id });
       }
     } catch (err) {
       process.stderr.write(`[distillation] Stale session check failed: ${(err as Error).message}\n`);

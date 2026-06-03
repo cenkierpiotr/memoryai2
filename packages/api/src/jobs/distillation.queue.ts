@@ -22,11 +22,11 @@ export const distillationQueue = new Queue<DistillationJob>('distillation', {
   },
 });
 
-distillationQueue.add = async function (data: DistillationJob) {
-  return Queue.prototype.add.call(this, 'distill', data, {
+export async function addDistillationJob(data: DistillationJob): Promise<Job<DistillationJob>> {
+  return distillationQueue.add('distill', data, {
     delay: 5_000,
     jobId: `distill:${data.sessionId}`,
   });
-};
+}
 
 export { Worker, connection };

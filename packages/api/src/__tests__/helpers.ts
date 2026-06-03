@@ -6,7 +6,7 @@
  * This avoids needing a real TCP socket and keeps tests self-contained.
  */
 
-import Fastify, { type FastifyInstance } from 'fastify';
+import Fastify, { type FastifyInstance, type FastifyError } from 'fastify';
 import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
 import sensible from '@fastify/sensible';
@@ -62,7 +62,7 @@ export async function createTestApp(): Promise<TestContext> {
   await app.register(mcpRoutes);
 
   // Error handler (mirrors index.ts)
-  app.setErrorHandler((err, _req, reply) => {
+  app.setErrorHandler((err: FastifyError, _req, reply) => {
     if (err.name === 'ZodError') {
       return reply.code(400).send({
         error: 'Validation Error',
