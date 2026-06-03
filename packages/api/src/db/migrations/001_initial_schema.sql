@@ -690,3 +690,13 @@ BEGIN
   ORDER BY m.tier, m.category;
 END;
 $$ LANGUAGE plpgsql;
+
+CREATE TABLE IF NOT EXISTS schema_migrations (
+  id          SERIAL PRIMARY KEY,
+  filename    TEXT UNIQUE NOT NULL,
+  applied_at  TIMESTAMPTZ DEFAULT NOW()
+);
+
+INSERT INTO schema_migrations (filename)
+VALUES ('001_initial_schema.sql')
+ON CONFLICT DO NOTHING;
