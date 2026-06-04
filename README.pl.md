@@ -1,5 +1,9 @@
 # MemoryAI
 
+**🌐 Language / Język:** [English](README.md) · [Polski](README.pl.md)
+
+---
+
 **Trwała pamięć dla modeli językowych.** Daje modelom AI (Claude, Gemini, GPT, Ollama) dostęp do faktów, decyzji i kontekstu z poprzednich sesji — automatycznie, bez żadnego wysiłku ze strony użytkownika.
 
 > "Dlaczego twój asystent AI zapomina, co ustaliliście wczoraj?" — MemoryAI rozwiązuje ten problem, działając jako zewnętrzny, odpytywalny mózg dla każdego modelu językowego.

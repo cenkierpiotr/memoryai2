@@ -1,5 +1,9 @@
 # MemoryAI
 
+**🌐 Language / Język:** [English](README.md) · [Polski](README.pl.md)
+
+---
+
 **Persistent memory layer for LLMs.** Gives AI models (Claude, Gemini, GPT, Ollama) access to facts, decisions, and context from previous sessions — automatically, without user prompting.
 
 > "Why does your AI forget what you agreed on yesterday?" — MemoryAI solves this by acting as an external, queryable brain for any LLM.
