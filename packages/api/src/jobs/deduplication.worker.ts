@@ -96,7 +96,7 @@ export async function scheduleDeduplication(): Promise<void> {
     try {
       // Run for all users with memories
       const users = await query<{ id: string }>(
-        `SELECT DISTINCT user_id AS id FROM memories WHERE tier != 'cold' GROUP BY user_id HAVING COUNT(*) > 20`
+        `SELECT user_id AS id FROM memories WHERE tier != 'cold' GROUP BY user_id HAVING COUNT(*) > 20`
       );
       for (const user of users.rows) {
         const result = await runDeduplication(user.id);

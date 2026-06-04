@@ -89,42 +89,42 @@ export const memoryService = {
     let invalidateBundle = false;
 
     const memories = await withTransaction(async (client) => {
-      const result: Memory[] = [];
+      // Build a single bulk INSERT instead of N individual round-trips
+      const valuePlaceholders: string[] = [];
+      const params: unknown[] = [];
+      let pIdx = 1;
+
       for (let i = 0; i < items.length; i++) {
         const dto = items[i];
         const category = (dto.category ?? 'general') as MemoryCategory;
         const isShared = dto.is_shared ?? AUTO_SHARED_CATEGORIES.includes(category);
         const content = prepareContent(dto.content, category);
         const vectorLiteral = embeddingService.toVectorLiteral(embeddings[i]);
-        const res = await client.query<Memory>(
-          `INSERT INTO memories
-             (user_id, project_id, session_id, tier, category, type, content,
-              importance, tags, language, pinned, is_shared, metadata, embedding)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::vector)
-           RETURNING ${MEMORY_COLS}`,
-          [
-            userId,
-            dto.project_id ?? null,
-            dto.session_id ?? null,
-            dto.tier ?? 'warm',
-            category,
-            dto.type ?? 'fact',
-            content,
-            dto.importance ?? 0.5,
-            dto.tags ?? [],
-            dto.language ?? 'auto',
-            dto.pinned ?? false,
-            isShared,
-            JSON.stringify(dto.metadata ?? {}),
-            vectorLiteral,
-          ]
+
+        valuePlaceholders.push(
+          `($${pIdx++}, $${pIdx++}, $${pIdx++}, $${pIdx++}, $${pIdx++}, $${pIdx++}, $${pIdx++}, $${pIdx++}, $${pIdx++}, $${pIdx++}, $${pIdx++}, $${pIdx++}, $${pIdx++}, $${pIdx++}::vector)`
         );
-        result.push(decryptContent(res.rows[0], userId));
-        if (res.rows[0].tier === 'core' || res.rows[0].tier === 'hot' || isShared) {
+        params.push(
+          userId, dto.project_id ?? null, dto.session_id ?? null,
+          dto.tier ?? 'warm', category, dto.type ?? 'fact', content,
+          dto.importance ?? 0.5, dto.tags ?? [], dto.language ?? 'auto',
+          dto.pinned ?? false, isShared, JSON.stringify(dto.metadata ?? {}),
+          vectorLiteral
+        );
+
+        if ((dto.tier ?? 'warm') === 'core' || (dto.tier ?? 'warm') === 'hot' || isShared) {
           invalidateBundle = true;
         }
       }
-      return result;
+
+      const res = await client.query<Memory>(
+        `INSERT INTO memories (user_id, project_id, session_id, tier, category, type, content,
+           importance, tags, language, pinned, is_shared, metadata, embedding)
+         VALUES ${valuePlaceholders.join(', ')}
+         RETURNING ${MEMORY_COLS}`,
+        params
+      );
+      return res.rows.map(r => decryptContent(r, userId));
     });
 
     if (invalidateBundle) {
@@ -248,8 +248,14 @@ export const memoryService = {
     let idx = 1;
 
     if (dto.content !== undefined) {
-      const existing = await this.findById(userId, id);
-      const category = (dto.category ?? existing?.category ?? 'general') as MemoryCategory;
+      // Only fetch the existing record when we need its category (i.e. dto.category not provided)
+      let category: MemoryCategory;
+      if (dto.category !== undefined) {
+        category = dto.category as MemoryCategory;
+      } else {
+        const existing = await this.findById(userId, id);
+        category = (existing?.category ?? 'general') as MemoryCategory;
+      }
       const encryptedContent = prepareContent(dto.content, category);
       const embedding = await embeddingService.embed(dto.content); // embed plaintext
       const vectorLiteral = embeddingService.toVectorLiteral(embedding);

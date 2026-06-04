@@ -11,90 +11,9 @@ import { sessionService } from '../services/session.service.js';
 import { memoryService } from '../services/memory.service.js';
 import { config } from '../config.js';
 import { query } from '../db/pool.js';
+import { callLLM } from '../utils/llm.js';
+import { logger } from '../utils/logger.js';
 import type { CreateMemoryDto, MemoryType, MemoryTier, MemoryCategory } from '@memoryai/shared';
-
-// ── LLM Providers ───────────────────────────────────────────
-
-async function callOllama(prompt: string): Promise<string> {
-  const res = await fetch(`${config.distillation.ollamaBaseUrl}/api/generate`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      model: config.distillation.model,
-      prompt,
-      stream: false,
-      options: { temperature: 0.2 },
-    }),
-  });
-  if (!res.ok) throw new Error(`Ollama distillation failed: ${res.status}`);
-  const data = await res.json() as { response: string };
-  return data.response;
-}
-
-async function callGemini(prompt: string): Promise<string> {
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${config.distillation.model}:generateContent?key=${config.distillation.geminiApiKey}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { temperature: 0.2 },
-      }),
-    }
-  );
-  if (!res.ok) throw new Error(`Gemini distillation failed: ${res.status}`);
-  const data = await res.json() as {
-    candidates: Array<{ content: { parts: Array<{ text: string }> } }>;
-  };
-  return data.candidates[0]?.content.parts[0]?.text ?? '';
-}
-
-async function callOpenAI(prompt: string): Promise<string> {
-  const res = await fetch('https://api.openai.com/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${config.distillation.openaiApiKey}`,
-    },
-    body: JSON.stringify({
-      model: config.distillation.model,
-      messages: [{ role: 'user', content: prompt }],
-      temperature: 0.2,
-    }),
-  });
-  if (!res.ok) throw new Error(`OpenAI distillation failed: ${res.status}`);
-  const data = await res.json() as { choices: Array<{ message: { content: string } }> };
-  return data.choices[0]?.message.content ?? '';
-}
-
-async function callAnthropic(prompt: string): Promise<string> {
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': config.distillation.anthropicApiKey,
-      'anthropic-version': '2023-06-01',
-    },
-    body: JSON.stringify({
-      model: config.distillation.model,
-      max_tokens: 2048,
-      messages: [{ role: 'user', content: prompt }],
-    }),
-  });
-  if (!res.ok) throw new Error(`Anthropic distillation failed: ${res.status}`);
-  const data = await res.json() as { content: Array<{ text: string }> };
-  return data.content[0]?.text ?? '';
-}
-
-async function callLLM(prompt: string): Promise<string> {
-  switch (config.distillation.provider) {
-    case 'gemini': return callGemini(prompt);
-    case 'openai': return callOpenAI(prompt);
-    case 'anthropic': return callAnthropic(prompt);
-    default: return callOllama(prompt);
-  }
-}
 
 // ── Distillation Logic ──────────────────────────────────────
 
@@ -230,7 +149,7 @@ export function startDistillationWorker(): Worker<DistillationJob> {
 
   worker.on('failed', async (job, err) => {
     if (!job) return;
-    process.stderr.write(`[distillation] Job failed for session ${job.data.sessionId}: ${err.message}\n`);
+    logger.error('distillation', `Job failed for session ${job.data.sessionId}: ${err.message}`);
     await query(
       `UPDATE distillation_jobs SET status = 'failed', error = $1, finished_at = NOW()
        WHERE session_id = $2 AND status = 'running'`,
@@ -257,7 +176,7 @@ export async function scheduleStaleSessionCheck(): Promise<void> {
         await addDistillationJob({ sessionId: session.id, userId: session.user_id });
       }
     } catch (err) {
-      process.stderr.write(`[distillation] Stale session check failed: ${(err as Error).message}\n`);
+      logger.error('distillation', `Stale session check failed: ${(err as Error).message}`);
     }
   }
 

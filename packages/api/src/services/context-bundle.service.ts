@@ -198,3 +198,7 @@ export const contextBundleService = {
     return res.rows;
   },
 };
+
+export async function closeBundleRedis(): Promise<void> {
+  await redis.quit().catch(() => redis.disconnect());
+}

@@ -19,6 +19,7 @@ class OllamaEmbeddingProvider implements EmbeddingProvider {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ model: this.model, input: text }),
+      signal: AbortSignal.timeout(10_000),
     });
     if (!res.ok) throw new Error(`Ollama embed failed: ${res.status} ${await res.text()}`);
     const data = await res.json() as { embeddings: number[][] };
@@ -30,6 +31,7 @@ class OllamaEmbeddingProvider implements EmbeddingProvider {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ model: this.model, input: texts }),
+      signal: AbortSignal.timeout(10_000),
     });
     if (!res.ok) throw new Error(`Ollama batch embed failed: ${res.status} ${await res.text()}`);
     const data = await res.json() as { embeddings: number[][] };
@@ -53,6 +55,7 @@ class GeminiEmbeddingProvider implements EmbeddingProvider {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ content: { parts: [{ text }] } }),
+        signal: AbortSignal.timeout(30_000),
       }
     );
     if (!res.ok) throw new Error(`Gemini embed failed: ${res.status} ${await res.text()}`);
@@ -87,6 +90,7 @@ class OpenAIEmbeddingProvider implements EmbeddingProvider {
         Authorization: `Bearer ${this.apiKey}`,
       },
       body: JSON.stringify({ model: this.model, input: texts }),
+      signal: AbortSignal.timeout(30_000),
     });
     if (!res.ok) throw new Error(`OpenAI embed failed: ${res.status} ${await res.text()}`);
     const data = await res.json() as { data: Array<{ embedding: number[] }> };

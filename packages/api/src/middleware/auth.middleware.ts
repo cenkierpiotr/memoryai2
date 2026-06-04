@@ -31,6 +31,8 @@ export async function requireAuth(request: FastifyRequest, reply: FastifyReply):
 
   const user = await authService.findByApiKey(apiKey);
   if (!user) {
+    // Constant-time response to prevent timing attacks
+    await new Promise(r => setTimeout(r, 50 + Math.random() * 50));
     reply.code(401).send({ error: 'Unauthorized', message: 'Invalid API key', statusCode: 401 });
     return;
   }

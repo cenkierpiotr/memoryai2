@@ -13,44 +13,9 @@
 import { query } from '../db/pool.js';
 import { memoryService } from '../services/memory.service.js';
 import { embeddingService } from '../services/embedding.service.js';
-import { config } from '../config.js';
+import { callLLM } from '../utils/llm.js';
+import { logger } from '../utils/logger.js';
 import type { MemoryCategory } from '@memoryai/shared';
-
-// ── LLM call (reuses config.distillation provider) ─────────
-
-async function callLLM(prompt: string): Promise<string> {
-  switch (config.distillation.provider) {
-    case 'gemini': {
-      const res = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${config.distillation.model}:generateContent?key=${config.distillation.geminiApiKey}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            contents: [{ parts: [{ text: prompt }] }],
-            generationConfig: { temperature: 0.1 },
-          }),
-        }
-      );
-      const data = await res.json() as { candidates: Array<{ content: { parts: Array<{ text: string }> } }> };
-      return data.candidates[0]?.content.parts[0]?.text ?? '';
-    }
-    default: {
-      const res = await fetch(`${config.distillation.ollamaBaseUrl}/api/generate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: config.distillation.model,
-          prompt,
-          stream: false,
-          options: { temperature: 0.1 },
-        }),
-      });
-      const data = await res.json() as { response: string };
-      return data.response;
-    }
-  }
-}
 
 const CONSOLIDATION_PROMPT = (content: string, createdAt: string, accessCount: number, importance: number) =>
   `You are a memory consolidation system. Evaluate this time-sensitive memory after ${Math.round((Date.now() - new Date(createdAt).getTime()) / 86400000)} days.
@@ -134,7 +99,7 @@ async function consolidateMemory(memId: string, userId: string): Promise<void> {
          (user_id, project_id, tier, category, type, content, importance,
           tags, language, metadata, embedding, consolidation_status)
        VALUES ($1, $2, 'warm', $3, 'fact', $4, $5, $6, $7,
-               '{"consolidated_from": "' || $8 || '"}'::jsonb,
+               jsonb_build_object('consolidated_from', $8),
                $9::vector, 'consolidated')`,
       [
         userId,
@@ -176,12 +141,12 @@ async function runImportanceDecay(): Promise<void> {
     `UPDATE memories
      SET tier = 'warm', updated_at = NOW()
      WHERE tier = 'hot'
-       AND last_accessed_at < NOW() - INTERVAL '30 days'
+       AND last_accessed < NOW() - INTERVAL '30 days'
        AND pinned = FALSE
      RETURNING id`
   );
   if (result.rows.length > 0) {
-    process.stderr.write(`[importance-decay] demoted ${result.rows.length} hot → warm memories\n`);
+    logger.info('importance-decay', `demoted ${result.rows.length} hot → warm memories`);
   }
 }
 
@@ -203,19 +168,19 @@ export async function scheduleConsolidationCheck(): Promise<void> {
 
       for (const row of due.rows) {
         await consolidateMemory(row.id, row.user_id).catch((err: Error) => {
-          process.stderr.write(`[consolidation] failed for ${row.id}: ${err.message}\n`);
+          logger.error('consolidation', `failed for ${row.id}: ${err.message}`);
         });
       }
 
       if (due.rows.length > 0) {
-        process.stderr.write(`[consolidation] processed ${due.rows.length} temporal memories\n`);
+        logger.info('consolidation', `processed ${due.rows.length} temporal memories`);
       }
 
       await runImportanceDecay().catch((err: Error) => {
-        process.stderr.write(`[importance-decay] failed: ${err.message}\n`);
+        logger.error('importance-decay', `failed: ${err.message}`);
       });
     } catch (err) {
-      process.stderr.write(`[consolidation] check failed: ${(err as Error).message}\n`);
+      logger.error('consolidation', `check failed: ${(err as Error).message}`);
     }
   }
 

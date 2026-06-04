@@ -18,6 +18,7 @@ import { projectsRoutes } from './routes/projects.route.js';
 import { adminRoutes } from './routes/admin.route.js';
 import { mcpRoutes } from './mcp/server.js';
 import { startDistillationWorker, scheduleStaleSessionCheck, stopStaleSessionCheck } from './jobs/distillation.worker.js';
+import { closeBundleRedis } from './services/context-bundle.service.js';
 import { scheduleConsolidationCheck, stopConsolidationCheck } from './jobs/consolidation.worker.js';
 import { scheduleDeduplication, stopDeduplication } from './jobs/deduplication.worker.js';
 import { registry } from './metrics.js';
@@ -172,6 +173,7 @@ const shutdown = async (signal: string) => {
   stopConsolidationCheck();
   stopDeduplication();
   await app.close();
+  await closeBundleRedis();
   await pool.end();
   process.exit(0);
 };
