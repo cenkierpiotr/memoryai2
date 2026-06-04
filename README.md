@@ -18,6 +18,8 @@ Self-hosted · PostgreSQL + pgvector · BullMQ · MCP + REST API · Multi-provid
 - [Remote Access via Tailscale](#remote-access-via-tailscale)
 - [Configuration](#configuration)
 - [MCP Tools Reference](#mcp-tools-reference)
+- [Open WebUI Integration](#open-webui-integration)
+- [Multi-Agent Orchestration](#multi-agent-orchestration)
 - [REST API Reference](#rest-api-reference)
 - [Memory Types and Importance Scale](#memory-types-and-importance-scale)
 - [Architecture](#architecture)
@@ -534,6 +536,135 @@ Closes the current session and queues background distillation. Also called autom
   "session_id": "current-session-id",
   "summary": "Optional brief summary of what was accomplished"
 }
+```
+
+---
+
+## Open WebUI Integration
+
+MemoryAI integrates with [Open WebUI](https://github.com/open-webui/open-webui) via two components located in [`openwebui/`](openwebui/):
+
+| File | Role |
+|------|------|
+| `memoryai_filter.py` | **Global Filter** — auto-injects relevant memories into every conversation's system prompt |
+| `memoryai_tools.py` | **Tools** — lets the model explicitly search/save memories on demand |
+
+### How the Filter works
+
+**On every user message (`inlet`):**
+1. Searches MemoryAI for memories relevant to the message
+2. Also searches for related entities (people, projects, tools)
+3. Injects a `[MEMORYAI CONTEXT]` block into the system prompt
+4. Saves the user message to a MemoryAI session for later distillation
+
+**After each AI response (`outlet`):**
+- Saves the assistant response to the session
+- Session is distilled into long-term memories when it goes stale
+
+### Installation
+
+```bash
+# Copy files into Open WebUI container
+docker cp openwebui/memoryai_filter.py openwebui:/app/backend/data/memoryai_filter.py
+docker cp openwebui/memoryai_tools.py  openwebui:/app/backend/data/memoryai_tools.py
+
+# Install via Open WebUI admin UI:
+# Admin → Functions → Add Filter → paste memoryai_filter.py
+# Admin → Tools → Add Tool → paste memoryai_tools.py
+```
+
+### Filter Valves (configuration)
+
+| Valve | Default | Description |
+|-------|---------|-------------|
+| `memoryai_url` | `http://localhost:3010` | MemoryAI API base URL |
+| `memoryai_token` | — | Bearer token from `ADMIN_API_KEY` |
+| `max_memories` | `6` | Max memories injected per request |
+| `min_score` | `0.45` | Minimum relevance score (0–1) |
+| `inject_entities` | `true` | Also inject entity facts |
+| `max_entities` | `3` | Max entities to inject |
+| `save_to_session` | `true` | Save messages for distillation |
+
+---
+
+## Multi-Agent Orchestration
+
+MemoryAI acts as the **shared memory layer** for multi-agent workflows. Multiple AI models can read and write to the same memory store, enabling asynchronous collaboration between agents.
+
+### Local MCP server for Claude Code
+
+[`integrations/claude-code/`](integrations/claude-code/) contains a local MCP server and CLI tool that give Claude Code direct access to **Gemini** (via existing OAuth session) and **local Ollama models** — no API keys required.
+
+**Files:**
+
+| File | Description |
+|------|-------------|
+| `mcp-local-ai.py` | Stdio MCP server with `ask_gemini`, `ask_model`, `ask_ollama`, `list_ai_models`, `list_ollama_models` tools |
+| `ask-model.py` | CLI script for quick model calls from the terminal |
+
+**Setup:**
+
+```bash
+# Add to .mcp.json in your project root
+{
+  "mcpServers": {
+    "local-ai": {
+      "type": "stdio",
+      "command": "python3",
+      "args": ["/path/to/mcp-local-ai.py"]
+    }
+  }
+}
+```
+
+**Available tools after reload:**
+
+```
+mcp__local-ai__ask_gemini      — Ask Gemini (2.5 Flash default, via OAuth — no API key)
+mcp__local-ai__ask_model       — Ask any Antigravity-connected model
+mcp__local-ai__ask_ollama      — Ask a local Ollama model (qwen3.5:4b default)
+mcp__local-ai__list_ai_models  — List Gemini/Claude/GPT models available
+mcp__local-ai__list_ollama_models — List local Ollama models
+```
+
+**CLI usage:**
+
+```bash
+python3 ask-model.py "Explain this function" --model gemini-2.5-flash
+python3 ask-model.py "Review this code" --model gemini-3.1-pro-high --system "You are a senior engineer"
+python3 ask-model.py --list-models
+```
+
+### Model selection guide
+
+| Task | Recommended model |
+|------|------------------|
+| Analysis, reasoning, web knowledge | `gemini-2.5-flash` or `gemini-3.1-pro-high` |
+| Code review / generation | `deepseek-coder-v2:16b` (Ollama) |
+| Fast/cheap local inference | `qwen3.5:4b` (Ollama default) |
+| Complex local reasoning | `qwen2.5:14b` or `mistral-nemo:latest` |
+| Vision / multimodal | `llama3.2-vision:11b` or `qwen2.5vl:7b` |
+| Cross-check / second opinion | Different model than the one that gave first answer |
+
+### How it works technically
+
+The MCP server discovers the Antigravity language server port and CSRF token **dynamically** at runtime by reading `/proc` — no hardcoded values, survives restarts automatically.
+
+```
+Claude Code
+  └─► mcp__local-ai__ask_gemini("review this PR")
+        └─► ConnectRPC call to Antigravity LS (127.0.0.1:44751)
+              └─► GetModelResponse{model: MODEL_GOOGLE_GEMINI_2_5_FLASH}
+                    └─► Google Cloud AI (via existing OAuth session)
+                          └─► response streamed back to Claude
+```
+
+```
+Claude Code
+  └─► mcp__local-ai__ask_ollama("explain this algorithm")
+        └─► HTTP POST to Ollama API (100.99.158.2:11434)
+              └─► local model inference (no internet required)
+                    └─► response returned to Claude
 ```
 
 ---

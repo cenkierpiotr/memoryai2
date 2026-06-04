@@ -18,6 +18,8 @@ Self-hosted · PostgreSQL + pgvector · BullMQ · MCP + REST API · Wieloprovide
 - [Zdalny dostęp przez Tailscale](#zdalny-dostęp-przez-tailscale)
 - [Konfiguracja](#konfiguracja)
 - [Narzędzia MCP — dokumentacja](#narzędzia-mcp--dokumentacja)
+- [Integracja z Open WebUI](#integracja-z-open-webui)
+- [Orkiestracja multi-agent](#orkiestracja-multi-agent)
 - [REST API — dokumentacja](#rest-api--dokumentacja)
 - [Typy wspomnień i skala ważności](#typy-wspomnień-i-skala-ważności)
 - [Architektura](#architektura)
@@ -534,6 +536,132 @@ Zamyka bieżącą sesję i kolejkuje dystylację w tle. Wywoływane też automat
   "session_id": "id-bieżącej-sesji",
   "summary": "Opcjonalne krótkie podsumowanie tego, co zostało zrobione"
 }
+```
+
+---
+
+## Integracja z Open WebUI
+
+MemoryAI integruje się z [Open WebUI](https://github.com/open-webui/open-webui) przez dwa komponenty w [`openwebui/`](openwebui/):
+
+| Plik | Rola |
+|------|------|
+| `memoryai_filter.py` | **Globalny filtr** — automatycznie wstrzykuje wspomnienia do każdej rozmowy |
+| `memoryai_tools.py` | **Narzędzia** — pozwala modelowi jawnie przeszukiwać/zapisywać pamięć |
+
+### Jak działa filtr
+
+**Na każdą wiadomość użytkownika (`inlet`):**
+1. Wyszukuje wspomnienia powiązane z wiadomością
+2. Wyszukuje encje (osoby, projekty, narzędzia)
+3. Wstrzykuje blok `[MEMORYAI CONTEXT]` do system promptu
+4. Zapisuje wiadomość do sesji MemoryAI (do późniejszej dystylacji)
+
+**Po każdej odpowiedzi modelu (`outlet`):**
+- Zapisuje odpowiedź asystenta do sesji
+- Sesja jest dystylowana do długoterminowych wspomnień gdy staje się nieaktywna
+
+### Instalacja
+
+```bash
+docker cp openwebui/memoryai_filter.py openwebui:/app/backend/data/memoryai_filter.py
+docker cp openwebui/memoryai_tools.py  openwebui:/app/backend/data/memoryai_tools.py
+
+# Następnie w UI Open WebUI:
+# Admin → Functions → Dodaj filtr → wklej memoryai_filter.py
+# Admin → Tools → Dodaj narzędzie → wklej memoryai_tools.py
+```
+
+### Valves (konfiguracja filtra)
+
+| Parametr | Domyślnie | Opis |
+|----------|-----------|------|
+| `memoryai_url` | `http://localhost:3010` | Adres API MemoryAI |
+| `memoryai_token` | — | Token Bearer z `ADMIN_API_KEY` |
+| `max_memories` | `6` | Maks. wspomnień na zapytanie |
+| `min_score` | `0.45` | Minimalny wynik trafności (0–1) |
+| `inject_entities` | `true` | Wstrzykuj też fakty o encjach |
+| `max_entities` | `3` | Maks. encji do wstrzyknięcia |
+| `save_to_session` | `true` | Zapisuj wiadomości do dystylacji |
+
+---
+
+## Orkiestracja multi-agent
+
+MemoryAI pełni rolę **wspólnej warstwy pamięci** dla workflow wieloagentowych. Wiele modeli AI może odczytywać i zapisywać do tego samego magazynu wspomnień, umożliwiając asynchroniczną współpracę między agentami.
+
+### Lokalny serwer MCP dla Claude Code
+
+[`integrations/claude-code/`](integrations/claude-code/) zawiera lokalny serwer MCP i narzędzie CLI dające Claude Code bezpośredni dostęp do **Gemini** (przez istniejącą sesję OAuth) i **lokalnych modeli Ollama** — bez kluczy API.
+
+**Pliki:**
+
+| Plik | Opis |
+|------|------|
+| `mcp-local-ai.py` | Serwer MCP (stdio) z narzędziami `ask_gemini`, `ask_model`, `ask_ollama`, `list_ai_models`, `list_ollama_models` |
+| `ask-model.py` | Skrypt CLI do szybkich wywołań modeli z terminala |
+
+**Konfiguracja:**
+
+```bash
+# Dodaj do .mcp.json w katalogu projektu
+{
+  "mcpServers": {
+    "local-ai": {
+      "type": "stdio",
+      "command": "python3",
+      "args": ["/ścieżka/do/mcp-local-ai.py"]
+    }
+  }
+}
+```
+
+**Dostępne narzędzia po restarcie:**
+
+```
+mcp__local-ai__ask_gemini         — Pytaj Gemini (2.5 Flash domyślnie, przez OAuth)
+mcp__local-ai__ask_model          — Pytaj dowolny model podłączony do Antigravity
+mcp__local-ai__ask_ollama         — Pytaj lokalny model Ollama (qwen3.5:4b domyślnie)
+mcp__local-ai__list_ai_models     — Lista modeli Gemini/Claude/GPT
+mcp__local-ai__list_ollama_models — Lista lokalnych modeli Ollama
+```
+
+**Użycie CLI:**
+
+```bash
+python3 ask-model.py "Wyjaśnij tę funkcję" --model gemini-2.5-flash
+python3 ask-model.py "Zrób code review" --model gemini-3.1-pro-high --system "Jesteś senior engineerem"
+python3 ask-model.py --list-models
+```
+
+### Dobór modelu
+
+| Zadanie | Zalecany model |
+|---------|----------------|
+| Analiza, rozumowanie | `gemini-2.5-flash` lub `gemini-3.1-pro-high` |
+| Code review / generowanie kodu | `deepseek-coder-v2:16b` (Ollama) |
+| Szybkie lokalne wywołanie | `qwen3.5:4b` (domyślny Ollama) |
+| Złożone rozumowanie lokalne | `qwen2.5:14b` lub `mistral-nemo:latest` |
+| Wizja / multimodal | `llama3.2-vision:11b` lub `qwen2.5vl:7b` |
+| Weryfikacja / druga opinia | Inny model niż ten co dał pierwsze wyniki |
+
+### Jak to działa technicznie
+
+Serwer MCP **dynamicznie** wykrywa port i token CSRF serwera językowego Antigravity przy starcie — brak hardkodowanych wartości, działa po każdym restarcie.
+
+```
+Claude Code
+  └─► mcp__local-ai__ask_gemini("zrób code review")
+        └─► wywołanie ConnectRPC do Antigravity LS (127.0.0.1:44751)
+              └─► GetModelResponse{model: MODEL_GOOGLE_GEMINI_2_5_FLASH}
+                    └─► Google Cloud AI (przez istniejącą sesję OAuth)
+                          └─► odpowiedź zwrócona do Claude
+
+Claude Code
+  └─► mcp__local-ai__ask_ollama("wyjaśnij algorytm")
+        └─► HTTP POST do Ollama API (100.99.158.2:11434)
+              └─► lokalna inferencja (brak internetu)
+                    └─► odpowiedź zwrócona do Claude
 ```
 
 ---
