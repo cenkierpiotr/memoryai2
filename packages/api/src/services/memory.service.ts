@@ -142,7 +142,7 @@ export const memoryService = {
   async search(userId: string, dto: SearchMemoriesDto): Promise<MemorySearchResult[]> {
     if (!dto.query.trim()) return [];
     const limit = Math.min(dto.limit ?? 10, 20);
-    const embedding = await embeddingService.embed(dto.query);
+    const embedding = await embeddingService.embedQuery(dto.query); // asymmetric query prefix
     const vectorLiteral = embeddingService.toVectorLiteral(embedding);
 
     const res = await query<MemorySearchResult & {
