@@ -8,6 +8,7 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { requireAuth } from '../middleware/auth.middleware.js';
 import { query } from '../db/pool.js';
+import { encrypt, decrypt, isEncrypted } from '../utils/encryption.js';
 
 const PROVIDER_TYPES = ['openai', 'anthropic', 'gemini', 'ollama', 'custom'] as const;
 
@@ -31,12 +32,20 @@ interface Provider {
 
 function maskKey(key: string | null): string | null {
   if (!key) return null;
-  if (key.length <= 8) return '••••••••';
-  return key.slice(0, 4) + '••••••••' + key.slice(-4);
+  const plain = isEncrypted(key) ? '(encrypted)' : key;
+  if (plain === '(encrypted)') return '(encrypted)';
+  if (plain.length <= 8) return '••••••••';
+  return plain.slice(0, 4) + '••••••••' + plain.slice(-4);
 }
 
-function sanitize(p: Provider, showKey = false) {
-  return { ...p, api_key: showKey ? p.api_key : maskKey(p.api_key) };
+function decryptKey(key: string | null): string | null {
+  if (!key) return null;
+  try { return isEncrypted(key) ? decrypt(key) : key; } catch { return key; }
+}
+
+function sanitize(p: Provider, revealKey = false) {
+  const key = revealKey ? decryptKey(p.api_key) : maskKey(p.api_key);
+  return { ...p, api_key: key };
 }
 
 export async function providersRoutes(app: FastifyInstance): Promise<void> {
@@ -54,12 +63,13 @@ export async function providersRoutes(app: FastifyInstance): Promise<void> {
   // POST /providers
   app.post('/providers', async (req: FastifyRequest, reply: FastifyReply) => {
     const body = createSchema.parse(req.body);
+    const encryptedKey = body.api_key ? encrypt(body.api_key) : null;
     const res = await query<Provider>(
       `INSERT INTO ai_providers (user_id, name, provider_type, base_url, api_key, models, notes, is_active)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
        RETURNING *`,
       [req.user.id, body.name, body.provider_type, body.base_url,
-       body.api_key ?? null, body.models ?? [], body.notes ?? null, body.is_active ?? true]
+       encryptedKey, body.models ?? [], body.notes ?? null, body.is_active ?? true]
     );
     return reply.code(201).send({ data: sanitize(res.rows[0]) });
   });
@@ -86,7 +96,7 @@ export async function providersRoutes(app: FastifyInstance): Promise<void> {
     if (body.name         !== undefined) { sets.push(`name = $${i++}`);          vals.push(body.name); }
     if (body.provider_type!== undefined) { sets.push(`provider_type = $${i++}`); vals.push(body.provider_type); }
     if (body.base_url     !== undefined) { sets.push(`base_url = $${i++}`);      vals.push(body.base_url); }
-    if (body.api_key      !== undefined) { sets.push(`api_key = $${i++}`);       vals.push(body.api_key); }
+    if (body.api_key      !== undefined) { sets.push(`api_key = $${i++}`);       vals.push(body.api_key ? encrypt(body.api_key) : null); }
     if (body.models       !== undefined) { sets.push(`models = $${i++}`);        vals.push(body.models); }
     if (body.notes        !== undefined) { sets.push(`notes = $${i++}`);         vals.push(body.notes); }
     if (body.is_active    !== undefined) { sets.push(`is_active = $${i++}`);     vals.push(body.is_active); }
@@ -120,8 +130,19 @@ export async function providersRoutes(app: FastifyInstance): Promise<void> {
     const provider = res.rows[0];
     if (!provider) return reply.code(404).send({ error: 'Not Found' });
 
+    // Decrypt stored key before use
+    const plainKey = decryptKey(provider.api_key);
+
+    // SSRF: block private/loopback IPs except for Ollama type
+    if (provider.provider_type !== 'ollama') {
+      const urlHost = new URL(provider.base_url).hostname;
+      if (/^(localhost|127\.|10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|::1)/.test(urlHost)) {
+        return reply.send({ data: { ok: false, message: 'Private/local URLs only allowed for Ollama provider type' } });
+      }
+    }
+
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    if (provider.api_key) headers['Authorization'] = `Bearer ${provider.api_key}`;
+    if (plainKey) headers['Authorization'] = `Bearer ${plainKey}`;
 
     let testUrl: string;
     let ok = false;
@@ -139,10 +160,12 @@ export async function providersRoutes(app: FastifyInstance): Promise<void> {
         case 'anthropic':
           testUrl = `${provider.base_url.replace(/\/$/, '')}/v1/models`;
           headers['anthropic-version'] = '2023-06-01';
-          if (provider.api_key) { delete headers['Authorization']; headers['x-api-key'] = provider.api_key; }
+          if (plainKey) { delete headers['Authorization']; headers['x-api-key'] = plainKey; }
           break;
         case 'gemini':
-          testUrl = `${provider.base_url.replace(/\/$/, '')}/v1/models${provider.api_key ? `?key=${provider.api_key}` : ''}`;
+          // Use header auth instead of URL param (avoid key in logs)
+          testUrl = `${provider.base_url.replace(/\/$/, '')}/v1beta/models`;
+          if (plainKey) headers['x-goog-api-key'] = plainKey;
           delete headers['Authorization'];
           break;
         default:

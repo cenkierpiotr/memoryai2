@@ -43,7 +43,7 @@ export async function runDecay(): Promise<DecayResult[]> {
        WHERE user_id = $1
          AND tier = 'hot'
          AND tier != 'core'
-         AND last_accessed < NOW() - ($2 || ' days')::interval
+         AND COALESCE(last_accessed, created_at) < NOW() - ($2 || ' days')::interval
        RETURNING id`,
       [user_id, HOT_TO_WARM_DAYS]
     );
@@ -56,7 +56,7 @@ export async function runDecay(): Promise<DecayResult[]> {
          AND tier = 'warm'
          AND tier != 'core'
          AND importance < $2
-         AND last_accessed < NOW() - ($3 || ' days')::interval
+         AND COALESCE(last_accessed, created_at) < NOW() - ($3 || ' days')::interval
        RETURNING id`,
       [user_id, COLD_IMPORTANCE_THRESHOLD, WARM_TO_COLD_DAYS]
     );

@@ -138,17 +138,25 @@ export async function proxyRoutes(app: FastifyInstance): Promise<void> {
 
     // Forward to backend
     const forwardBody = { ...body, messages };
-    const backendRes = await fetch(`${backendUrl}/v1/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${backendKey}`,
-        ...(req.headers['openai-organization']
-          ? { 'OpenAI-Organization': req.headers['openai-organization'] as string }
-          : {}),
-      },
-      body: JSON.stringify(forwardBody),
-    });
+    let backendRes: Response;
+    try {
+      backendRes = await fetch(`${backendUrl}/v1/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${backendKey}`,
+          ...(req.headers['openai-organization']
+            ? { 'OpenAI-Organization': req.headers['openai-organization'] as string }
+            : {}),
+        },
+        body: JSON.stringify(forwardBody),
+        signal: AbortSignal.timeout(120_000),
+      });
+    } catch (err) {
+      return reply.code(502).send({
+        error: { message: `Proxy backend unreachable: ${err instanceof Error ? err.message : String(err)}`, type: 'proxy_error' },
+      });
+    }
 
     // Relay status + headers
     reply.code(backendRes.status);
@@ -184,11 +192,12 @@ export async function proxyRoutes(app: FastifyInstance): Promise<void> {
 
       const piped = reader.pipeThrough(transform);
 
-      // After stream ends, save session messages (fire-and-forget)
+      // tee() splits into two independent readers: one for the client, one to capture content
+      const [forClient, forCapture] = piped.tee();
+
       void (async () => {
-        // Wait for stream to finish before saving
-        const reader2 = piped.getReader();
-        try { while (!(await reader2.read()).done) {/* drain */} } catch { /* ignore */ }
+        const captureReader = forCapture.getReader();
+        try { while (!(await captureReader.read()).done) { /* drain to allow transform to run */ } } catch { /* ignore */ }
         if (userQuery && sessionId) {
           await sessionService.addMessage(userId, sessionId, { role: 'user', content: userQuery }).catch(() => {});
           if (assistantContent) {
@@ -197,7 +206,7 @@ export async function proxyRoutes(app: FastifyInstance): Promise<void> {
         }
       })();
 
-      return reply.send(piped);
+      return reply.send(forClient);
     }
 
     // Non-streaming: read full response

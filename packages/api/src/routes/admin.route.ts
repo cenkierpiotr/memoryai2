@@ -209,6 +209,7 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     'integration.n8n.url', 'integration.n8n.webhookToken',
     'integration.github.token',
     'webhook.onMemorySave', 'webhook.onDistillation',
+    // Danger Zone — stored as hints only, NOT applied at runtime; require manual .env update + restart
     'db.url', 'redis.url', 'auth.jwtSecret', 'auth.adminApiKey', 'auth.encryptionKey',
   ]);
 
