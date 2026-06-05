@@ -196,8 +196,19 @@ export const memoriesApi = {
     return request<{ data: Memory }>('POST', '/memories', dto);
   },
 
+  update(id: string, dto: Partial<CreateMemoryDto>) {
+    return request<{ data: Memory }>('PATCH', `/memories/${id}`, dto);
+  },
+
   delete(id: string) {
     return request<void>('DELETE', `/memories/${id}`);
+  },
+
+  search(query: string, options: { limit?: number } = {}) {
+    return request<{ data: Memory[]; meta: { total: number } }>('POST', '/memories/search', {
+      query,
+      limit: options.limit ?? 25,
+    });
   },
 
   stats() {
