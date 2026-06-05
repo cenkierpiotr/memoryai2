@@ -1818,18 +1818,12 @@ RRF łączy rankingi z vector search i FTS przez `1/(k+rank)` zamiast sumowania 
 
 ## Mapa drogowa
 
-- [ ] **Reranker cross-encoder** — `reranker.service.ts` już zaimplementowany z graceful fallback; czeka na `POST /api/rerank` w Ollama (endpoint jeszcze niedostępny w v0.30.5)
-- [ ] **Panel React** (`packages/dashboard`) — przeglądanie wspomnień, wyszukiwanie, edycja, wyświetlanie statusu zadań dystylacji, analityka, wizualizacja grafu wspomnień
+- [ ] **Reranker cross-encoder** — `reranker.service.ts` zaimplementowany z graceful fallback; czeka na `POST /api/rerank` w Ollama (niedostępny w v0.30.5, autoaktywuje się gdy pojawi się)
+- [ ] **Panel React** (`packages/dashboard`) — pełna aplikacja: CRUD wspomnień, wyszukiwanie, edycja, ustawienia kluczy API i modeli AI, statystyki, historia zadań dystylacji
 - [ ] **TypeScript SDK** (`packages/sdk`, `@memoryai/client`) — typowany klient do łatwej integracji w dowolnej aplikacji Node.js
-- [ ] **Python SDK** (`pip install memoryai`) — dla środowisk Python, Jupyter notebooks, LangChain, LlamaIndex
-- [ ] **Middleware proxy** — przezroczysty proxy kompatybilny z OpenAI API, który auto-wstrzykuje kontekst pamięci i auto-zapisuje odpowiedzi modelu, bez żadnych zmian po stronie modelu
-- [ ] **Zanikanie wspomnień** — automatyczne zmniejszanie wyników ważności starych, nieużywanych wspomnień; opcjonalne archiwizowanie lub usuwanie
-- [ ] **Interfejs administracyjny wielu użytkowników** — zarządzanie użytkownikami, limity wspomnień per użytkownik, statystyki użytkowania
-- [ ] **Eksport / import** — kopia zapasowa i przywracanie wszystkich wspomnień jako przenośny JSON; import z ChatGPT Memory, Mem0, itp.
-- [ ] **Konsolidacja wspomnień** — okresowa automatyczna deduplikacja i scalanie podobnych wspomnień (tygodniowe zadanie już w kolejce, UI i dostrajanie wkrótce)
-- [ ] **Przestrzenie nazw projektów** — izoluj wspomnienia per projekt, aby różne agenty AI pracujące na różnych bazach kodu nie zanieczyszczały nawzajem swoich kontekstów
-- [ ] **Wzbogacenie wyszukiwaniem internetowym** — opcjonalnie wzbogacaj wspomnienia wynikami wyszukiwania internetowego w czasie dystylacji dla lepszego kontekstu
-- [ ] **Interfejs przypiętych wspomnień** — łatwe przypinanie / odpinanie wspomnień z panelu
+- [ ] **OpenAI-compatible middleware proxy** — przezroczysty proxy kompatybilny z OpenAI API, który auto-wstrzykuje kontekst pamięci i auto-zapisuje odpowiedzi modelu bez zmian po stronie klienta
+- [ ] **Zanikanie wspomnień (memory decay)** — automatyczne obniżanie importance + przenoszenie do `cold` tier wspomnień nieużywanych przez 30+ dni; cold tier wyłączony z domyślnego wyszukiwania
+- [ ] **Przestrzenie nazw projektów** — izolacja wspomnień per projekt z obsługą cross-project dla wspomnień `shared`; schemat DB już gotowy (`project_id`)
 
 ---
 
