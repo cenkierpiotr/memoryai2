@@ -1752,6 +1752,70 @@ Prompt dystylacji znajduje się w `packages/api/src/jobs/distillation.worker.ts`
 
 ---
 
+## Dobór modeli AI — wyniki testów
+
+Poniżej udokumentowane decyzje techniczne podjęte podczas doboru modeli dla każdej funkcji systemu.
+
+### Modele embeddingowe (wyszukiwanie semantyczne)
+
+Testowane na zbiorze 7 zapytań PL↔EN (recall@5):
+
+| Model | Wymiary | VRAM | Recall | Wynik |
+|-------|---------|------|--------|-------|
+| `nomic-embed-text` | 768 | 274 MB | **14%** | ❌ Angielski model — fatalny dla polskiego |
+| `mxbai-embed-large` | 1024 | 670 MB | **71%** | Dobry, ale EN-oriented base |
+| `mxbai-embed-large` + query prefix + pg_trgm | 1024 | 670 MB | **86%** | Duża poprawa przez optymalizacje |
+| `embeddinggemma:300m` | 768 | 300 MB | **71%** | Google, lekki, dobry dla EN |
+| `qwen3-embedding:4b` | 2560 | 2.5 GB | **86%** | Większy ≠ lepszy tutaj |
+| **`qwen3-embedding:0.6b`** | **1024** | **600 MB** | **100%** | ✅ **Wybrany — #1 MTEB multilingual** |
+
+**Wniosek:** `qwen3-embedding:0.6b` — natywne wytrenowanie na korpusach wielojęzycznych sprawia, że "deployment" i "wdrożenie" leżą blisko siebie w przestrzeni wektorowej. Paradoks: model 0.6B bije 4B w tym zadaniu (krótkie teksty, PL/EN).
+
+### Wyszukiwanie — strategia rankowania
+
+| Strategia | Recall@5 | Uwagi |
+|-----------|----------|-------|
+| Cosine similarity (wektor only) | ~60% | Baseline pgvector |
+| Weighted sum (70% cosine + 20% FTS + 10% importance) | 71% | Pierwotna implementacja |
+| Weighted sum + query prefix + pg_trgm | 86% | Optymalizacje |
+| **RRF (Reciprocal Rank Fusion) + qwen3** | **100%** | ✅ **Aktualna implementacja** |
+
+RRF łączy rankingi z vector search i FTS przez `1/(k+rank)` zamiast sumowania surowych wyników — odporniejsze na różnice w skalach.
+
+### Modele rerankujące (cross-encoder)
+
+| Model | VRAM | Latencja/dok | Status |
+|-------|------|-------------|--------|
+| `sam860/qwen3-reranker:0.6b-Q8_0` | ~600 MB | **466ms** | ⏳ Czeka na `/api/rerank` w Ollama |
+
+**Wynik testów:** Ollama 0.30.5 nie ma endpointu `/api/rerank`. Próba przez `/api/generate` z promptem yes/no: model generuje błędne tokeny zamiast "yes"/"no". Przy 20 dokumentach sekwencyjnych: **+9.7s latencji** — niepraktyczne. Kod gotowy z graceful fallback.
+
+**Wniosek:** Reranker jest zbędny przy recall@5=100% — LLM czytający cały blok `[MEMORY]` sam rerankuje semantycznie. Wdrożyć gdy Ollama doda natywne wsparcie.
+
+### Modele dystylacji (ekstrakcja wspomnień z sesji)
+
+| Model | Szybkość | Jakość PL | Prywatność | Koszt |
+|-------|----------|-----------|------------|-------|
+| `qwen2.5:7b` (Ollama) | 1–5s/sesja GPU | Dobra | 100% lokalnie | Darmowy |
+| `qwen2.5:3b` (Ollama) | <2s/sesja GPU | Średnia | 100% lokalnie | Darmowy |
+| Gemini Flash | 0.5–2s/sesja | Doskonała | Chmura | Niski |
+| Claude Haiku | 1–3s/sesja | Doskonała | Chmura | Niski-średni |
+
+**Wybrany:** `qwen2.5:7b` lokalnie. Kluczowa naprawa: prompt dystylacji zawierał **angielskie wzorce** (`"Chose X over Y"`, `"Prefers X"`), przez co model ignorował regułę "pisz w języku rozmowy" i zapisywał wspomnienia po angielsku. Naprawione przez dodanie polskich wzorców z `CRITICAL:` prefixem.
+
+### Modele orkiestracji multi-agent
+
+| Model | Czas | Najlepszy do |
+|-------|------|--------------|
+| `gemini-2.5-flash` (przez OAuth) | ~1s | Domyślny — szybkie analizy, research |
+| `ollama/auto` (aktywny w VRAM) | ~1.5s | Lokalne/prywatne dane |
+| `claude-sonnet-4-6` (subagent) | ~2–5s | Złożone zadania z narzędziami |
+| `gemini-3.1-pro-high` | ~4s | Głęboka analiza |
+
+**Zasada doboru:** Gemini Flash do wszystkiego co nie wymaga narzędzi i nie jest prywatne. Ollama gdy dane są wrażliwe. Claude subagent gdy potrzeba iteracji z narzędziami.
+
+---
+
 ## Mapa drogowa
 
 - [ ] **Reranker cross-encoder** — `reranker.service.ts` już zaimplementowany z graceful fallback; czeka na `POST /api/rerank` w Ollama (endpoint jeszcze niedostępny w v0.30.5)
