@@ -199,8 +199,17 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     'embedding.dimensions', 'embedding.geminiApiKey', 'embedding.openaiApiKey',
     'distillation.provider', 'distillation.model', 'distillation.ollamaBaseUrl',
     'distillation.geminiApiKey', 'distillation.anthropicApiKey', 'distillation.openaiApiKey',
-    'distillation.inactivityMinutes', 'reranker.enabled', 'reranker.model',
+    'distillation.inactivityMinutes', 'distillation.everyNMessages',
+    'reranker.enabled', 'reranker.model', 'reranker.topN',
     'proxy.backendUrl', 'proxy.backendApiKey',
+    'decay.hotDays', 'decay.coldDays', 'decay.coldImportance',
+    'search.maxResults', 'security.rateLimitRpm', 'security.corsOrigins', 'security.jwtExpiry',
+    'integration.openwebui.url', 'integration.openwebui.token',
+    'integration.openwebui.maxMemories', 'integration.openwebui.minScore',
+    'integration.n8n.url', 'integration.n8n.webhookToken',
+    'integration.github.token',
+    'webhook.onMemorySave', 'webhook.onDistillation',
+    'db.url', 'redis.url', 'auth.jwtSecret', 'auth.adminApiKey', 'auth.encryptionKey',
   ]);
 
   app.get('/admin/config', async (req: FastifyRequest, reply: FastifyReply) => {
@@ -223,6 +232,24 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
       'reranker.model':           process.env.RERANKER_MODEL ?? 'qwen3-reranker:0.6b',
       'proxy.backendUrl':         process.env.PROXY_BACKEND_URL ?? 'https://api.openai.com',
       'proxy.backendApiKey':      '',
+      'distillation.everyNMessages': process.env.DISTILL_EVERY_N_MESSAGES ?? '0',
+      'reranker.topN':            process.env.RERANKER_TOP_N ?? '20',
+      'decay.hotDays':            process.env.DECAY_HOT_DAYS ?? '14',
+      'decay.coldDays':           process.env.DECAY_COLD_DAYS ?? '60',
+      'decay.coldImportance':     process.env.DECAY_COLD_IMPORTANCE ?? '0.7',
+      'search.maxResults':        process.env.SEARCH_MAX_RESULTS ?? '20',
+      'security.rateLimitRpm':    process.env.RATE_LIMIT_RPM ?? '10000',
+      'security.corsOrigins':     process.env.CORS_ORIGINS ?? '*',
+      'security.jwtExpiry':       process.env.JWT_EXPIRY ?? '24h',
+      'integration.openwebui.url':          '',
+      'integration.openwebui.token':        '',
+      'integration.openwebui.maxMemories':  '6',
+      'integration.openwebui.minScore':     '0.45',
+      'integration.n8n.url':               '',
+      'integration.n8n.webhookToken':      '',
+      'integration.github.token':          '',
+      'webhook.onMemorySave':     '',
+      'webhook.onDistillation':   '',
     };
 
     return reply.send({ data: { ...defaults, ...overrides } });

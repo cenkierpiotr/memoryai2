@@ -285,6 +285,26 @@ export const adminApi = {
       headers: { Authorization: `Bearer ${getApiKey()}` },
     });
   },
+
+  listProviders() {
+    return request<{ data: import('./pages/settings/types').Provider[] }>('GET', '/providers');
+  },
+
+  createProvider(dto: Record<string, unknown>) {
+    return request<{ data: import('./pages/settings/types').Provider }>('POST', '/providers', dto);
+  },
+
+  updateProvider(id: string, dto: Record<string, unknown>) {
+    return request<{ data: import('./pages/settings/types').Provider }>('PATCH', `/providers/${id}`, dto);
+  },
+
+  deleteProvider(id: string) {
+    return request<void>('DELETE', `/providers/${id}`);
+  },
+
+  testProvider(id: string) {
+    return request<{ data: { ok: boolean; message: string } }>('POST', `/providers/${id}/test`);
+  },
 };
 
 // ── Auth check ───────────────────────────────────────────────

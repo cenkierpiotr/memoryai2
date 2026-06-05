@@ -17,6 +17,7 @@ import { entitiesRoutes } from './routes/entities.route.js';
 import { projectsRoutes } from './routes/projects.route.js';
 import { adminRoutes } from './routes/admin.route.js';
 import { proxyRoutes } from './routes/proxy.route.js';
+import { providersRoutes } from './routes/providers.route.js';
 import { mcpRoutes } from './mcp/server.js';
 import { startDistillationWorker, scheduleStaleSessionCheck, stopStaleSessionCheck } from './jobs/distillation.worker.js';
 import { closeBundleRedis } from './services/context-bundle.service.js';
@@ -103,6 +104,7 @@ await app.register(entitiesRoutes, { prefix: '/v1' });
 await app.register(projectsRoutes, { prefix: '/v1' });
 await app.register(adminRoutes, { prefix: '/v1' });
 await app.register(proxyRoutes);
+await app.register(providersRoutes, { prefix: '/v1' });
 await app.register(mcpRoutes);
 
 // ── Error Handler ────────────────────────────────────────────
