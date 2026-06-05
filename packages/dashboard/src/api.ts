@@ -35,13 +35,14 @@ async function request<T>(
 ): Promise<T> {
   const base = getApiBase();
   const url = `${base}${path}`;
+  const hasBody = body !== undefined;
   const res = await fetch(url, {
     method,
     headers: {
-      'Content-Type': 'application/json',
+      ...(hasBody ? { 'Content-Type': 'application/json' } : {}),
       Authorization: `Bearer ${getApiKey()}`,
     },
-    body: body !== undefined ? JSON.stringify(body) : undefined,
+    body: hasBody ? JSON.stringify(body) : undefined,
   });
 
   if (res.status === 204) return undefined as T;
