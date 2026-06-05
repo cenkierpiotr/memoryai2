@@ -19,10 +19,10 @@ export async function callLLM(prompt: string, timeoutMs = 120_000): Promise<stri
   switch (config.distillation.provider) {
     case 'gemini': {
       const res = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${config.distillation.model}:generateContent?key=${config.distillation.geminiApiKey}`,
+        `https://generativelanguage.googleapis.com/v1beta/models/${config.distillation.model}:generateContent`,
         {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', 'x-goog-api-key': config.distillation.geminiApiKey },
           body: JSON.stringify({
             contents: [{ parts: [{ text: prompt }] }],
             generationConfig: { temperature: 0.1 },
