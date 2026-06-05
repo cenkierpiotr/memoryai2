@@ -72,7 +72,7 @@ Claude może samodzielnie: zdelegować code review do Gemini, poprosić Ollamę 
 
 - **Sześć typów wspomnień**: `fact` (fakt), `decision` (decyzja), `preference` (preferencja), `instruction` (instrukcja), `entity_relation` (relacja encji), `summary` (podsumowanie)
 - **Skala ważności** 0.0–1.0 — przypisywana przez model lub ręcznie; wpływa na ranking pobierania
-- **Wyszukiwanie hybrydowe** — 70% semantyczne (odległość cosinusowa przez pgvector) + 20% pełnotekstowe (tsvector BM25) + 10% waga ważności, wszystko w jednym zapytaniu PostgreSQL
+- **Wyszukiwanie hybrydowe RRF** — Reciprocal Rank Fusion łączy ranking wektorowy (pgvector cosine) + ranking tekstowy (tsvector + pg_trgm trigram) + mały boost ważności; lepsze niż ważona suma surowych wyników, szczególnie dla zapytań wielojęzycznych PL/EN
 - **Nazwane encje** — ustrukturyzowane wpisy grafu wiedzy z kategoryzowanymi typami: `person` (osoba), `project` (projekt), `company` (firma), `system`, `tool` (narzędzie), `server` (serwer), `other` (inne)
 - **Fakty encji** — każda encja gromadzi stwierdzenia faktyczne z wielu sesji (upsert po nazwie)
 - **Przypięte wspomnienia** — oznacz wspomnienia jako przypięte, aby zawsze były dołączane do kontekstu niezależnie od wyniku trafności
@@ -187,15 +187,15 @@ Modele językowe są **bezstanowe** — każda sesja zaczyna od zera. MemoryAI d
 
 ### Wyszukiwanie hybrydowe
 
-Wspomnienia są pobierane przy użyciu ważonej kombinacji trzech sygnałów, wszystkich obliczanych w jednym zapytaniu PostgreSQL bez dodatkowych przejazdów sieciowych:
+Wspomnienia są pobierane przez **Reciprocal Rank Fusion (RRF)** — standardową technikę łączenia wyników z wielu źródeł przez rankingi, nie surowe wyniki. Wszystko obliczane w jednym zapytaniu PostgreSQL bez dodatkowych przejazdów sieciowych:
 
-| Sygnał | Waga | Metoda |
-|--------|------|--------|
-| Podobieństwo semantyczne | 70% | Odległość cosinusowa przez pgvector (operator `<=>`) |
-| Dopasowanie pełnotekstowe | 20% | Ranking BM25 przez `tsvector` + `to_tsquery` |
-| Wynik ważności | 10% | Zdefiniowany przez użytkownika lub przypisany przez LLM (0.0–1.0) |
+| Sygnał | Metoda | Rola w RRF |
+|--------|--------|-----------|
+| Podobieństwo semantyczne | Odległość cosinusowa przez pgvector (`<=>`) | Ranking wektorowy |
+| Dopasowanie pełnotekstowe | `tsvector` (simple + english) + trigram (`pg_trgm`) | Ranking tekstowy |
+| Ważność + recency | Zdefiniowane przez użytkownika lub LLM (0.0–1.0) | Mały boost do RRF score |
 
-Wynik hybrydowy oznacza, że bardzo ważne wspomnienie wypłynie nawet wtedy, gdy nie jest najbliższym dopasowaniem semantycznym — przydatne dla przypiętych instrukcji i krytycznych decyzji.
+RRF łączy oba rankingi wzorem `1/(k + rank_vector) + 1/(k + rank_text)` (k=60, standard branżowy). Dzięki temu wspomnienie które jest na miejscu #1 wektorowo i #15 tekstowo wygrywa z takim które jest #5 i #5 — co odpowiada intuicji lepiej niż ważona suma surowych wyników.
 
 ---
 
@@ -1208,12 +1208,12 @@ Wybierz jednego z trzech dostawców do konwersji tekstu na wektory:
 # Opcja 1: Ollama (domyślna — lokalna, prywatna, bez kosztów API)
 EMBEDDING_PROVIDER=ollama
 OLLAMA_BASE_URL=http://localhost:11434
-OLLAMA_EMBED_MODEL=nomic-embed-text    # 768 wymiarów
-EMBED_DIMENSIONS=768
+OLLAMA_EMBED_MODEL=qwen3-embedding:0.6b  # 1024 wymiary, #1 MTEB multilingual, 100% recall PL/EN
+EMBED_DIMENSIONS=1024
 
-# Dla lepszej obsługi wielojęzycznej / polskiej:
-# OLLAMA_EMBED_MODEL=bge-m3
-# EMBED_DIMENSIONS=1024
+# Alternatywy:
+# OLLAMA_EMBED_MODEL=mxbai-embed-large    # 1024 wymiary, 86% recall — dobry backup
+# OLLAMA_EMBED_MODEL=embeddinggemma:300m  # 768 wymiarów, 300MB VRAM — ultra-lekki
 
 # Opcja 2: Google Gemini
 EMBEDDING_PROVIDER=gemini
@@ -1520,10 +1520,23 @@ memoryai/
 
 ### Modele Ollama dla lokalnych embeddingów i dystylacji
 
+#### Modele embeddingów — wyniki testów (benchmark PL/EN retrieval, 7 zapytań)
+
+| Model | Wymiary | VRAM | Recall PL/EN | Uwagi |
+|-------|---------|------|-------------|-------|
+| `nomic-embed-text` | 768 | 274 MB | 14% (1/7) | Angielski — słaby dla polskiego |
+| `mxbai-embed-large` | 1024 | 670 MB | 71% (5/7) | Dobry wielojęzyczny |
+| `mxbai-embed-large` + optymalizacje | 1024 | 670 MB | 86% (6/7) | + query prefix, pg_trgm, wagi |
+| **`qwen3-embedding:0.6b`** | **1024** | **600 MB** | **100% (7/7)** | **Zalecany — #1 MTEB multilingual** |
+| `qwen3-embedding:4b` | 2560 | 2.5 GB | 86% (6/7) | Paradoks: większy ≠ lepszy tutaj |
+| `embeddinggemma:300m` | 768 | 300 MB | 71% (5/7) | Lekki, Google, dobry dla EN |
+
+**Rekomendacja:** `qwen3-embedding:0.6b` z `EMBED_DIMENSIONS=1024`. Zajmuje tylko 600 MB VRAM, najlepszy recall dla treści mieszanych PL/EN, dostępny przez `ollama pull qwen3-embedding:0.6b`.
+
+#### Modele dystylacji
+
 | Model | Typ | RAM / VRAM | Uwagi |
 |-------|-----|-----------|-------|
-| `nomic-embed-text` | Embedding | 274 MB | Domyślny — dobra jakość, angielski + polski |
-| `bge-m3` | Embedding | 570 MB | Najlepszy dla treści wielojęzycznych / polskich; użyj z `EMBED_DIMENSIONS=1024` |
 | `qwen2.5:7b` | Dystylacja | 4.7 GB | Zalecany — silna ekstrakcja ustrukturyzowanych faktów |
 | `qwen2.5:3b` | Dystylacja | 2.0 GB | Lżejsza alternatywa, nieco niższa jakość ekstrakcji |
 | `llama3.2:3b` | Dystylacja | 2.0 GB | Alternatywa skoncentrowana na angielskim |

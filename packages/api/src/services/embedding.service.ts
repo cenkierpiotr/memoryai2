@@ -19,7 +19,7 @@ class OllamaEmbeddingProvider implements EmbeddingProvider {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ model: this.model, input: text }),
-      signal: AbortSignal.timeout(10_000),
+      signal: AbortSignal.timeout(60_000),
     });
     if (!res.ok) throw new Error(`Ollama embed failed: ${res.status} ${await res.text()}`);
     const data = await res.json() as { embeddings: number[][] };
@@ -31,7 +31,7 @@ class OllamaEmbeddingProvider implements EmbeddingProvider {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ model: this.model, input: texts }),
-      signal: AbortSignal.timeout(10_000),
+      signal: AbortSignal.timeout(60_000),
     });
     if (!res.ok) throw new Error(`Ollama batch embed failed: ${res.status} ${await res.text()}`);
     const data = await res.json() as { embeddings: number[][] };
