@@ -200,6 +200,7 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     'distillation.provider', 'distillation.model', 'distillation.ollamaBaseUrl',
     'distillation.geminiApiKey', 'distillation.anthropicApiKey', 'distillation.openaiApiKey',
     'distillation.inactivityMinutes', 'reranker.enabled', 'reranker.model',
+    'proxy.backendUrl', 'proxy.backendApiKey',
   ]);
 
   app.get('/admin/config', async (req: FastifyRequest, reply: FastifyReply) => {
@@ -220,6 +221,8 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
       'distillation.inactivityMinutes': process.env.DISTILL_INACTIVITY_MINUTES ?? '15',
       'reranker.enabled':         process.env.RERANKER_ENABLED ?? 'true',
       'reranker.model':           process.env.RERANKER_MODEL ?? 'qwen3-reranker:0.6b',
+      'proxy.backendUrl':         process.env.PROXY_BACKEND_URL ?? 'https://api.openai.com',
+      'proxy.backendApiKey':      '',
     };
 
     return reply.send({ data: { ...defaults, ...overrides } });

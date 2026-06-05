@@ -34,9 +34,12 @@ const CONFIG_FIELDS: { key: string; label: string; group: string; type?: string;
   // Reranker
   { key: 'reranker.enabled', label: 'Enabled', group: 'Reranker', options: ['true', 'false'] },
   { key: 'reranker.model', label: 'Reranker model', group: 'Reranker' },
+  // Proxy
+  { key: 'proxy.backendUrl', label: 'Backend URL', group: 'OpenAI Proxy' },
+  { key: 'proxy.backendApiKey', label: 'Backend API key', group: 'OpenAI Proxy', type: 'password' },
 ];
 
-const GROUPS = ['Embedding Model', 'Distillation Model', 'Reranker'];
+const GROUPS = ['Embedding Model', 'Distillation Model', 'Reranker', 'OpenAI Proxy'];
 
 export function Settings({ onLogout }: Props) {
   const [apiKey, setApiKeyState] = useState(getApiKey());
