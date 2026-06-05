@@ -66,7 +66,7 @@ Claude może samodzielnie: zdelegować code review do Gemini, poprosić Ollamę 
 - **BullMQ + Redis** — niezawodna asynchroniczna kolejka zadań do dystylacji w tle; przeżywa restarty, automatycznie ponawia nieudane zadania
 - **Serwer MCP** (HTTP + SSE, JSON-RPC 2.0) — kompatybilny z Claude Code, Cursor, VS Code, Windsurf, Continue.dev, Claude Desktop, Antigravity
 - **REST API** — pełne CRUD dla wspomnień, sesji, encji i zarządzania kluczami API
-- **Panel webowy** (w trakcie rozwoju) — przeglądanie wspomnień, wyszukiwanie, edycja, historia zadań dystylacji
+- **Panel webowy** (`/dashboard/`) — przeglądanie i edycja wspomnień, zarządzanie projektami, statystyki, historia dystylacji. Settings z 8 zakładkami: Połączenie, Dostawcy AI, Zadania, Integracje, Pamięć, Bezpieczeństwo, Admin, Danger Zone
 
 ### Pamięć
 
@@ -743,6 +743,106 @@ Przypadki użycia:
 
 ---
 
+## Panel administracyjny
+
+Dashboard dostępny pod adresem `/dashboard/` serwowanym przez API. Logowanie kluczem API Bearer.
+
+### Zakładki Settings
+
+| Zakładka | Co konfiguruje |
+|----------|---------------|
+| **Połączenie** | API key, base URL |
+| **Dostawcy AI** | Lista dostawców API (OpenAI, Anthropic, Gemini, Ollama, custom) — CRUD, test połączenia, auto-detect modeli Ollama |
+| **Zadania** | Przypisanie dostawcy do: embedding, dystylacji, rerankera, proxy backendu |
+| **Integracje** | IDE config snippets (Claude Code, Cursor, Windsurf, Antigravity), Open WebUI, n8n, GitHub, webhooki |
+| **Pamięć** | Progi decay (hot/cold), limity wyszukiwania |
+| **Bezpieczeństwo** | Rate limit RPM, CORS origins, JWT expiry |
+| **Admin** | Memory decay, deduplication, rebuild vector index, export JSON, logout |
+| **Danger Zone** | DB URL, Redis URL, JWT secret, Encryption key, Admin API key — każda zmiana wymaga wpisania `CONFIRM` |
+
+### Funkcje Memories
+
+- Lista wspomnień z filtrowaniem po tier/category i paginacją
+- **Semantyczne wyszukiwanie** (debounced 400ms) — przeszukuje wszystkie wspomnienia przez `POST /memories/search`, nie tylko aktualną stronę
+- **Edycja** każdego wspomnienia (content, type, tier, category, importance, is_shared)
+- Widok szczegółów + usuwanie
+
+---
+
+## OpenAI-compatible Proxy
+
+Drop-in replacement dla OpenAI API — automatycznie wstrzykuje kontekst pamięci i zapisuje rozmowy do sesji:
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="https://your-memoryai/proxy",
+    api_key="mai_your_api_key"  # MemoryAI API key
+)
+
+# Wszystkie rozmowy automatycznie dostają kontekst z pamięci
+response = client.chat.completions.create(
+    model="gpt-4o",
+    messages=[{"role": "user", "content": "Jaki był nasz ostatni projekt?"}]
+)
+```
+
+**Nagłówki opcjonalne:**
+- `x-session-id` — ID sesji MemoryAI do kontynuacji (tworzy nową jeśli brak)
+- `x-project` — nazwa projektu do ograniczenia kontekstu
+
+**Konfiguracja** w Settings → OpenAI Proxy lub przez `.env`:
+```env
+PROXY_BACKEND_URL=https://api.openai.com
+PROXY_BACKEND_API_KEY=sk-...
+```
+
+---
+
+## TypeScript SDK
+
+```typescript
+import { createClient } from '@memoryai/sdk';
+
+const client = createClient({
+  apiKey: 'mai_your_key',
+  baseUrl: 'https://your-memoryai',
+});
+
+// Zapisz wspomnienie
+await client.memories.save('User prefers TypeScript strict mode', {
+  type: 'preference', tier: 'core', importance: 0.9,
+});
+
+// Wyszukaj semantycznie
+const results = await client.memories.search('TypeScript preferences');
+
+// Zarządzaj projektami
+const project = await client.projects.create('my-app', {
+  aliases: ['MyApp', 'the app'],
+  gitRemote: 'github.com/user/my-app',
+});
+
+// Kontekst przez MCP
+const context = await client.mcp.getContext(['typescript', 'preferences'], 'my-app');
+```
+
+---
+
+## Backup
+
+PostgreSQL jest automatycznie dumpowany przed każdym snapshotem Kopia:
+
+```bash
+# Ręczny dump
+PGPASSWORD=... pg_dump -h localhost -p 5432 -U memoryai -F c -f backup.dump memoryai
+```
+
+Dump trafia do `/tmp/backups/memoryai_YYYYMMDD.dump` — Kopia snapshottuje `/tmp/backups` co noc. Przechowywanych 7 ostatnich dumpów.
+
+---
+
 ## Integracja z Open WebUI
 
 MemoryAI integruje się z [Open WebUI](https://github.com/open-webui/open-webui) przez dwa komponenty Python w katalogu `openwebui/`. Nie wymagają żadnych zmian w konfiguracji modelu AI — wstrzykiwanie pamięci jest w pełni przezroczyste.
@@ -1226,7 +1326,22 @@ OPENAI_API_KEY=your_key_here
 OPENAI_EMBED_MODEL=text-embedding-3-small
 ```
 
-**Uwaga:** `EMBED_DIMENSIONS` musi odpowiadać modelowi. Zmiana tego ustawienia po zapisaniu danych wymaga ponownego embeddingu wszystkich istniejących wspomnień (uruchom `scripts/reembed.sh`).
+**Uwaga:** `EMBED_DIMENSIONS` musi odpowiadać modelowi. Zmiana po zapisaniu danych wymaga re-embeddingu wszystkich wspomnień.
+
+### Proxy
+
+```env
+PROXY_BACKEND_URL=https://api.openai.com   # lub inny OpenAI-compatible endpoint
+PROXY_BACKEND_API_KEY=sk-...               # klucz do backendu proxy
+```
+
+### Memory Decay
+
+```env
+DECAY_HOT_DAYS=14          # hot → warm po N dniach bez dostępu
+DECAY_COLD_DAYS=60         # warm → cold po N dniach + importance < progu
+DECAY_COLD_IMPORTANCE=0.7  # wspomnienia powyżej tego progu nigdy nie trafią do cold
+```
 
 ### Model LLM dystylacji
 
@@ -1305,8 +1420,8 @@ memoryai/
 │   │       └── jobs/
 │   │           ├── distillation.queue.ts   Definicja kolejki BullMQ
 │   │           └── distillation.worker.ts  Ekstrakcja LLM w tle + harmonogram bezczynności
-│   ├── dashboard/             React + Vite admin UI (w trakcie rozwoju)
-│   ├── sdk/                   TypeScript client SDK — @memoryai/client (w trakcie rozwoju)
+│   ├── dashboard/             React + Vite admin UI — pełna aplikacja z 8 zakładkami Settings
+│   ├── sdk/                   TypeScript client SDK — @memoryai/sdk, MemoryAIClient, createClient()
 │   └── shared/                Wspólne typy TypeScript (Memory, Session, Entity, itp.)
 ├── integrations/
 │   └── claude-code/
@@ -1485,8 +1600,8 @@ memoryai/
 │   │       └── jobs/
 │   │           ├── distillation.queue.ts  Kolejka BullMQ + definicje typów zadań
 │   │           └── distillation.worker.ts Worker: prompt LLM + ekstrakcja wspomnień + harmonogram
-│   ├── dashboard/                       React + Vite UI (w trakcie rozwoju)
-│   └── sdk/                             @memoryai/client TypeScript SDK (w trakcie rozwoju)
+│   ├── dashboard/                       React + Vite UI — pełna aplikacja, Settings 8 zakładek
+│   └── sdk/                             @memoryai/sdk — TypeScript client SDK, MemoryAIClient
 └── scripts/
     ├── setup.sh                         Pierwsze ustawienie: generowanie .env, Docker, konfiguracja IDE
     └── create-vector-index.sh           Budowanie indeksu HNSW dla dużych zbiorów danych
