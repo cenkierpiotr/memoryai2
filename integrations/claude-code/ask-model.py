@@ -21,12 +21,10 @@ Available models (use the alias):
 """
 
 import sys
-import os
 import re
 import json
 import socket
 import ssl
-import struct
 import subprocess
 import argparse
 
@@ -197,7 +195,7 @@ def main():
     parser = argparse.ArgumentParser(description='Ask AI models via Antigravity language server')
     parser.add_argument('prompt', nargs='?', help='Prompt to send to the model')
     parser.add_argument('--model', '-m', default='gemini-2.5-flash',
-                        help='Model alias (default: gemini-2.5-flash)')
+                        help='Model alias (default: gemini-2.5-flash). For Ollama use "ollama/auto" or "ollama/MODEL_NAME"')
     parser.add_argument('--system', '-s', help='System prompt')
     parser.add_argument('--list-models', '-l', action='store_true', help='List available models')
     parser.add_argument('--timeout', '-t', type=int, default=30, help='Timeout in seconds')

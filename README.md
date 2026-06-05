@@ -4,14 +4,33 @@
 
 ---
 
-**Warstwa trwałej pamięci dla modeli językowych.** Daje modelom AI (Claude, Gemini, GPT, Ollama) dostęp do faktów, decyzji, preferencji i kontekstu z poprzednich sesji — automatycznie, bez żadnych dodatkowych działań ze strony użytkownika.
+**Warstwa trwałej pamięci i orkiestracji agentów dla modeli językowych.** Daje modelom AI (Claude, Gemini, GPT, Ollama) dostęp do faktów, decyzji i kontekstu z poprzednich sesji — i pozwala im **samodzielnie delegować zadania do innych modeli AI** bez żadnych kluczy API.
 
-> "Dlaczego twoje AI zapomina wszystko, co wczoraj ustaliliście?" — MemoryAI rozwiązuje ten problem, działając jako zewnętrzna, odpytywalna pamięć długoterminowa dla dowolnego modelu językowego.
+> "Dlaczego twoje AI zapomina wszystko, co wczoraj ustaliliście?" — MemoryAI rozwiązuje ten problem i idzie dalej: Claude może automatycznie wysłać zadanie do Gemini lub lokalnego Ollamy, zweryfikować wynik i działać dalej — bez żadnej akcji z Twojej strony.
 
 ![Self-hosted](https://img.shields.io/badge/self--hosted-yes-blue)
 ![PostgreSQL + pgvector](https://img.shields.io/badge/PostgreSQL-pgvector-4169e1)
 ![MCP + REST](https://img.shields.io/badge/MCP-REST%20API-green)
 ![Multi-agent](https://img.shields.io/badge/multi--agent-orchestration-orange)
+
+### W skrócie — co robi MemoryAI
+
+**🧠 Pamięć między sesjami** — Claude, Gemini czy GPT pamiętają Twoje decyzje, preferencje i kontekst projektów z poprzednich rozmów. Zero konfiguracji po stronie użytkownika — model wywołuje narzędzia MCP automatycznie.
+
+**🤖 Orkiestracja agentów bez kluczy API** — lokalny serwer MCP `local-ai` daje Claude Code bezpośredni dostęp do:
+- **Gemini** (2.5 Flash ~1s, 3.1 Pro ~4s) przez istniejącą sesję OAuth Antigravity
+- **Ollama** (lokalnie na Dellu) — automatycznie wybiera model załadowany w VRAM
+- **Claude subagent** — pełne możliwości agentowe z narzędziami (~2-5s)
+
+Claude może samodzielnie: zdelegować code review do Gemini, poprosić Ollamę o analizę prywatnych danych, skrzyżować opinie kilku modeli — wszystko w jednym workflow, bez Twojego udziału.
+
+**📊 Benchmark (zmierzone czasy):**
+| Agent | Czas | Zastosowanie |
+|-------|------|-------------|
+| Gemini 2.5 Flash | ~1s | domyślny, szybkie zadania |
+| Ollama/auto (VRAM) | ~1.5s | lokalne/prywatne dane |
+| Claude subagent | ~2-5s | złożone, wymaga narzędzi |
+| Gemini 3.1 Pro | ~4s | głęboka analiza |
 
 ---
 

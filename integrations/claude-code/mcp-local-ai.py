@@ -147,7 +147,26 @@ def _ask(prompt: str, model: str = "gemini-2.5-flash", system: str = None, timeo
     return str(result)
 
 
-def _ask_ollama(prompt: str, model: str = "qwen3.5:4b", system: str = None, timeout: int = 120) -> str:
+def _get_loaded_ollama_model() -> str:
+    """Return currently loaded model in VRAM, falling back to qwen3.5:4b."""
+    try:
+        req = urllib.request.Request(f"{OLLAMA_URL}/api/ps", method="GET")
+        with urllib.request.urlopen(req, timeout=3) as r:
+            data = json.loads(r.read())
+            # Skip embedding-only models (nomic, mxbai, snowflake, bge)
+            skip = ('nomic', 'mxbai', 'snowflake', 'bge', 'embed')
+            for m in data.get("models", []):
+                name = m.get("name", "")
+                if not any(s in name for s in skip):
+                    return name
+    except Exception:
+        pass
+    return "qwen3.5:4b"
+
+
+def _ask_ollama(prompt: str, model: str = "auto", system: str = None, timeout: int = 120) -> str:
+    if model == "auto":
+        model = _get_loaded_ollama_model()
     payload = {
         "model": model,
         "prompt": prompt,
@@ -260,11 +279,10 @@ TOOLS = [
     {
         "name": "ask_ollama",
         "description": (
-            "Ask a locally running Ollama model on the Dell server. "
-            "Available models include: llama3.1:8b, llama3:latest, mistral:latest, "
-            "codellama:latest, deepseek-coder:6.7b, qwen2.5:7b-instruct-q4_K_M, "
-            "codestral:22b, mistral-nemo:latest and more. "
-            "Runs fully locally — no internet or API key needed."
+            "Ask a locally running Ollama model on the Dell server (ollama/100.99.158.2). "
+            "Defaults to 'auto' — automatically uses whichever model is loaded in VRAM (no cold start). "
+            "Only specify a model name if you need a specific one (may cause 30-60s cold start). "
+            "Best for: private/local data, code tasks (deepseek-coder:6.7b), quick inference."
         ),
         "inputSchema": {
             "type": "object",
@@ -276,11 +294,11 @@ TOOLS = [
                 "model": {
                     "type": "string",
                     "description": (
-                        "Ollama model name. Examples: llama3.1:8b (default), "
-                        "mistral:latest, codellama:latest, deepseek-coder:6.7b, "
-                        "qwen2.5:7b-instruct-q4_K_M, codestral:22b"
+                        "'auto' (default) — use whichever model is in VRAM right now (fastest). "
+                        "Or name a specific model: qwen3.5:4b, deepseek-coder:6.7b, "
+                        "qwen2.5:14b, mistral-nemo:latest, llama3.1:8b, qwen2.5-coder:7b"
                     ),
-                    "default": "llama3.1:8b",
+                    "default": "auto",
                 },
                 "system": {
                     "type": "string",

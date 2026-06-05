@@ -4,14 +4,33 @@
 
 ---
 
-**Persistent memory layer for LLMs.** Gives AI models (Claude, Gemini, GPT, Ollama) access to facts, decisions, preferences, and context from previous sessions — automatically, without any user prompting.
+**Persistent memory and agent orchestration layer for LLMs.** Gives AI models (Claude, Gemini, GPT, Ollama) access to facts, decisions, and context from previous sessions — and lets them **autonomously delegate tasks to other AI models** without any API keys.
 
-> "Why does your AI forget everything you agreed on yesterday?" — MemoryAI solves this by acting as an external, queryable long-term memory for any LLM.
+> "Why does your AI forget everything you agreed on yesterday?" — MemoryAI fixes that and goes further: Claude can automatically send a task to Gemini or a local Ollama model, verify the result, and keep going — with zero user involvement.
 
 ![Self-hosted](https://img.shields.io/badge/self--hosted-yes-blue)
 ![PostgreSQL + pgvector](https://img.shields.io/badge/PostgreSQL-pgvector-4169e1)
 ![MCP + REST](https://img.shields.io/badge/MCP-REST%20API-green)
 ![Multi-agent](https://img.shields.io/badge/multi--agent-orchestration-orange)
+
+### At a glance — what MemoryAI does
+
+**🧠 Memory across sessions** — Claude, Gemini, or GPT remember your decisions, preferences, and project context from previous conversations. Zero user configuration — the model calls MCP tools automatically.
+
+**🤖 Agent orchestration without API keys** — the `local-ai` MCP server gives Claude Code direct access to:
+- **Gemini** (2.5 Flash ~1s, 3.1 Pro ~4s) via existing Antigravity OAuth session
+- **Ollama** (locally on your server) — automatically picks whichever model is loaded in VRAM
+- **Claude subagent** — full agentic capabilities with tools (~2-5s)
+
+Claude can autonomously: delegate code review to Gemini, ask Ollama to analyze private data, cross-check answers across multiple models — all in one workflow, no user action required.
+
+**📊 Benchmark (measured times):**
+| Agent | Time | Best for |
+|-------|------|----------|
+| Gemini 2.5 Flash | ~1s | default, quick tasks |
+| Ollama/auto (VRAM) | ~1.5s | local/private data |
+| Claude subagent | ~2-5s | complex, needs tools |
+| Gemini 3.1 Pro | ~4s | deep reasoning |
 
 ---
 
