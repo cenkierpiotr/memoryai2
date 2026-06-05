@@ -1819,11 +1819,12 @@ RRF łączy rankingi z vector search i FTS przez `1/(k+rank)` zamiast sumowania 
 ## Mapa drogowa
 
 - [ ] **Reranker cross-encoder** — `reranker.service.ts` zaimplementowany z graceful fallback; czeka na `POST /api/rerank` w Ollama (niedostępny w v0.30.5, autoaktywuje się gdy pojawi się)
-- [ ] **Panel React** (`packages/dashboard`) — pełna aplikacja: CRUD wspomnień, wyszukiwanie, edycja, ustawienia kluczy API i modeli AI, statystyki, historia zadań dystylacji
-- [ ] **TypeScript SDK** (`packages/sdk`, `@memoryai/client`) — typowany klient do łatwej integracji w dowolnej aplikacji Node.js
-- [ ] **OpenAI-compatible middleware proxy** — przezroczysty proxy kompatybilny z OpenAI API, który auto-wstrzykuje kontekst pamięci i auto-zapisuje odpowiedzi modelu bez zmian po stronie klienta
-- [ ] **Zanikanie wspomnień (memory decay)** — automatyczne obniżanie importance + przenoszenie do `cold` tier wspomnień nieużywanych przez 30+ dni; cold tier wyłączony z domyślnego wyszukiwania
-- [ ] **Przestrzenie nazw projektów** — izolacja wspomnień per projekt z obsługą cross-project dla wspomnień `shared`; schemat DB już gotowy (`project_id`)
+- [ ] **Monitoring / alerting** — powiadomienie gdy serwer padnie (UptimeRobot lub własny health check ping)
+- [x] **Panel React** (`packages/dashboard`) — CRUD wspomnień, projekty, statystyki, ustawienia modeli AI (embedding/distillation/reranker/proxy), admin actions (decay, dedup, index)
+- [x] **TypeScript SDK** (`packages/sdk`, `@memoryai/client`) — typowany klient, `MemoryAIClient`, `createClient()`, wszystkie endpointy REST + MCP
+- [x] **OpenAI-compatible middleware proxy** — `POST /proxy/v1/chat/completions`, auto-inject memories, streaming, session recording, konfigurowalne przez dashboard
+- [x] **Zanikanie wspomnień (memory decay)** — tygodniowy worker: hot→warm (14d), warm→cold (60d + importance<0.7); `POST /admin/decay` do ręcznego uruchomienia
+- [x] **Przestrzenie nazw projektów** — 13 projektów z aliasami, git_remote, opisami i przypisanymi wspomnieniami; `project_name` w MCP auto-resolve
 
 ---
 
