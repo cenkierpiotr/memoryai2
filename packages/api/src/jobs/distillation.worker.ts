@@ -44,10 +44,13 @@ Rules:
 - importance: 0.9-1.0=critical rules/decisions, 0.7-0.8=important facts, 0.5-0.6=context, 0.3-0.4=minor
 - Skip greetings, pleasantries, and trivial content
 - Maximum 15 memories per session
-- Write content in the same language as the conversation
-- Decision pattern: "Chose X over Y — reason"
-- Preference pattern: "Prefers X over Y"
-- Instruction pattern: "Always X when Y"
+- CRITICAL: Write content EXACTLY in the language of the conversation. If conversation is in Polish, write Polish. If in English, write English. NEVER translate.
+- Polish decision pattern: "Zdecydowano X zamiast Y — powód"
+- Polish preference pattern: "Preferuje X nad Y"
+- Polish instruction pattern: "Zawsze X kiedy Y"
+- English decision pattern: "Chose X over Y — reason"
+- English preference pattern: "Prefers X over Y"
+- English instruction pattern: "Always X when Y"
 - Include one summary memory if conversation covered multiple topics`;
 
 const VALID_TYPES: MemoryType[] = ['fact', 'decision', 'preference', 'instruction', 'entity_relation', 'summary'];
