@@ -21,6 +21,7 @@ import { startDistillationWorker, scheduleStaleSessionCheck, stopStaleSessionChe
 import { closeBundleRedis } from './services/context-bundle.service.js';
 import { scheduleConsolidationCheck, stopConsolidationCheck } from './jobs/consolidation.worker.js';
 import { scheduleDeduplication, stopDeduplication } from './jobs/deduplication.worker.js';
+import { scheduleDecay, stopDecay, runDecay } from './jobs/decay.worker.js';
 import { registry } from './metrics.js';
 
 const app = Fastify({
@@ -155,6 +156,9 @@ async function start() {
     await scheduleDeduplication();
     app.log.info('Deduplication worker started (runs weekly)');
 
+    scheduleDecay();
+    app.log.info('Memory decay worker started (runs weekly)');
+
     // Start server
     await app.listen({ port: config.server.port, host: config.server.host });
     app.log.info(`MemoryAI API running on http://${config.server.host}:${config.server.port}`);
@@ -172,6 +176,7 @@ const shutdown = async (signal: string) => {
   stopStaleSessionCheck();
   stopConsolidationCheck();
   stopDeduplication();
+  stopDecay();
   await app.close();
   await closeBundleRedis();
   await pool.end();

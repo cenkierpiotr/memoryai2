@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { requireAuth } from '../middleware/auth.middleware.js';
 import { auditService } from '../services/audit.service.js';
 import { runDeduplication } from '../jobs/deduplication.worker.js';
+import { runDecay } from '../jobs/decay.worker.js';
 import { query } from '../db/pool.js';
 
 export async function adminRoutes(app: FastifyInstance): Promise<void> {
@@ -155,6 +156,14 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
   app.post('/admin/deduplicate', async (req: FastifyRequest, reply: FastifyReply) => {
     const result = await runDeduplication(req.user.id);
     return reply.send({ data: result });
+  });
+
+  // ── Memory decay ───────────────────────────────────────────
+
+  app.post('/admin/decay', async (req: FastifyRequest, reply: FastifyReply) => {
+    const results = await runDecay();
+    const total = results.reduce((s, r) => s + r.hotToWarm + r.warmToCold, 0);
+    return reply.send({ data: { results, total } });
   });
 
   // ── Stats (admin view) ──────────────────────────────────────
