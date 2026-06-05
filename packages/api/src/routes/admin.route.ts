@@ -190,4 +190,54 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
       },
     });
   });
+
+  // ── Config (read/write user settings) ──────────────────────
+
+  // Allowlist of keys that can be set via UI (no arbitrary env injection)
+  const ALLOWED_CONFIG_KEYS = new Set([
+    'embedding.provider', 'embedding.ollamaModel', 'embedding.ollamaBaseUrl',
+    'embedding.dimensions', 'embedding.geminiApiKey', 'embedding.openaiApiKey',
+    'distillation.provider', 'distillation.model', 'distillation.ollamaBaseUrl',
+    'distillation.geminiApiKey', 'distillation.anthropicApiKey', 'distillation.openaiApiKey',
+    'distillation.inactivityMinutes', 'reranker.enabled', 'reranker.model',
+  ]);
+
+  app.get('/admin/config', async (req: FastifyRequest, reply: FastifyReply) => {
+    // Merge env defaults with DB overrides
+    const dbSettings = await query<{ key: string; value: string }>(
+      'SELECT key, value FROM user_settings WHERE user_id = $1', [req.user.id]
+    );
+    const overrides = Object.fromEntries(dbSettings.rows.map(r => [r.key, r.value]));
+
+    const defaults: Record<string, string> = {
+      'embedding.provider':       process.env.EMBEDDING_PROVIDER ?? 'ollama',
+      'embedding.ollamaModel':    process.env.OLLAMA_EMBED_MODEL ?? 'qwen3-embedding:0.6b',
+      'embedding.ollamaBaseUrl':  process.env.OLLAMA_BASE_URL ?? 'http://localhost:11434',
+      'embedding.dimensions':     process.env.EMBED_DIMENSIONS ?? '1024',
+      'distillation.provider':    process.env.DISTILL_PROVIDER ?? 'ollama',
+      'distillation.model':       process.env.DISTILL_MODEL ?? 'qwen2.5:7b-instruct-q4_K_M',
+      'distillation.ollamaBaseUrl': process.env.OLLAMA_BASE_URL ?? 'http://localhost:11434',
+      'distillation.inactivityMinutes': process.env.DISTILL_INACTIVITY_MINUTES ?? '15',
+      'reranker.enabled':         process.env.RERANKER_ENABLED ?? 'true',
+      'reranker.model':           process.env.RERANKER_MODEL ?? 'qwen3-reranker:0.6b',
+    };
+
+    return reply.send({ data: { ...defaults, ...overrides } });
+  });
+
+  app.patch('/admin/config', async (req: FastifyRequest, reply: FastifyReply) => {
+    const body = z.record(z.string()).parse(req.body);
+    const allowed = Object.entries(body).filter(([k]) => ALLOWED_CONFIG_KEYS.has(k));
+
+    for (const [key, value] of allowed) {
+      await query(
+        `INSERT INTO user_settings(user_id, key, value, updated_at)
+         VALUES($1,$2,$3,NOW())
+         ON CONFLICT(user_id,key) DO UPDATE SET value=$3, updated_at=NOW()`,
+        [req.user.id, key, value]
+      );
+    }
+
+    return reply.send({ data: { updated: allowed.map(([k]) => k) } });
+  });
 }

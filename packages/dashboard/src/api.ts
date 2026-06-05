@@ -248,8 +248,27 @@ export const adminApi = {
     return request<{ data: unknown }>('POST', '/admin/vector-index');
   },
 
+  runDecay() {
+    return request<{ data: { total: number } }>('POST', '/admin/decay');
+  },
+
+  runDeduplication() {
+    return request<{ data: unknown }>('POST', '/admin/deduplicate');
+  },
+
+  stats() {
+    return request<{ data: { tier: string; count: string; avg_importance: string }[] }>('GET', '/admin/stats');
+  },
+
+  getConfig() {
+    return request<{ data: Record<string, string> }>('GET', '/admin/config');
+  },
+
+  updateConfig(settings: Record<string, string>) {
+    return request<{ data: Record<string, string> }>('PATCH', '/admin/config', settings);
+  },
+
   exportMemories() {
-    // Returns raw fetch response so caller can trigger download
     const base = getApiBase();
     return fetch(`${base}/admin/export`, {
       headers: { Authorization: `Bearer ${getApiKey()}` },
