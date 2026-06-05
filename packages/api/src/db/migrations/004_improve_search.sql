@@ -6,6 +6,9 @@
 
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
+-- Must DROP first — PostgreSQL won't replace a function when OUT param types change
+DROP FUNCTION IF EXISTS search_memories_v2(uuid, vector, text, integer, uuid, text[], text[], double precision, boolean);
+
 -- Add GIN trigram index for fast similarity search
 CREATE INDEX IF NOT EXISTS memories_content_trgm_idx
   ON memories USING GIN (content gin_trgm_ops);
