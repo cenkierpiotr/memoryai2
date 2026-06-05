@@ -1565,6 +1565,37 @@ Po 1 roku aktywnego codziennego użytkowania (10 sesji/dzień, 5 wspomnień wyod
 | Ollama (załadowany nomic-embed-text) | ~300 MB | ~500 MB |
 | **Łącznie** | **~490 MB** | **~1.5 GB** |
 
+### Zużycie tokenów (Claude)
+
+MemoryAI deleguje obliczenia do Ollamy lokalnie — embeddingi i dystylacja **nie zużywają tokenów Claude**. Jedyny overhead to kontekst wstrzykiwany do okna rozmowy:
+
+| Komponent | Tokeny Claude | Częstotliwość | Uwagi |
+|-----------|--------------|---------------|-------|
+| Opisy 6 narzędzi MCP | ~900 | Raz na sesję | Stały koszt, ładowany przy starcie |
+| Wywołanie `memory_get_context` | ~23 | Per query | Sam JSON call |
+| Wstrzyknięty kontekst (10 wspomnień) | ~215 | Per query | Faktyczna pamięć |
+| Surowa odpowiedź API (JSON) | ~1600 | Per query | Widoczne przez model |
+| `memory_save` call + response | ~58 | Per zapis | Minimalne |
+| **Łącznie per zapytanie** | **~2800** | Per query | |
+
+Dystylacja i embeddingi używają **0 tokenów Claude** (Ollama lokalnie):
+
+| Operacja | Tokeny | Model |
+|----------|--------|-------|
+| Embedding wspomnienia | ~50 | Ollama — qwen3-embedding:0.6b |
+| Dystylacja sesji (6 wiad.) | ~300 | Ollama — qwen2.5:7b |
+
+**Overhead względny** (2800 tokenów) zależy od rozmiaru kontekstu rozmowy:
+
+| Kontekst rozmowy | Overhead pamięci |
+|-----------------|-----------------|
+| 10K tokenów | +28% |
+| 50K tokenów | +5.6% |
+| 100K tokenów | +2.8% |
+| 200K tokenów | +1.4% |
+
+W typowej sesji Claude Code (50K+ kontekstu) overhead MemoryAI wynosi **mniej niż 6%** tokenów Claude.
+
 ### Opóźnienia sieciowe
 
 | Operacja | Typowe opóźnienie |
@@ -1733,6 +1764,7 @@ Prompt dystylacji znajduje się w `packages/api/src/jobs/distillation.worker.ts`
 
 ## Mapa drogowa
 
+- [ ] **Reranker cross-encoder** — `reranker.service.ts` już zaimplementowany z graceful fallback; czeka na `POST /api/rerank` w Ollama (endpoint jeszcze niedostępny w v0.30.5)
 - [ ] **Panel React** (`packages/dashboard`) — przeglądanie wspomnień, wyszukiwanie, edycja, wyświetlanie statusu zadań dystylacji, analityka, wizualizacja grafu wspomnień
 - [ ] **TypeScript SDK** (`packages/sdk`, `@memoryai/client`) — typowany klient do łatwej integracji w dowolnej aplikacji Node.js
 - [ ] **Python SDK** (`pip install memoryai`) — dla środowisk Python, Jupyter notebooks, LangChain, LlamaIndex
