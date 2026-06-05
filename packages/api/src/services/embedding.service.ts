@@ -108,17 +108,17 @@ function createProvider(): EmbeddingProvider {
 
 const provider = createProvider();
 
-// mxbai-embed-large uses asymmetric retrieval:
-// - Documents stored without prefix (plain text)
-// - Queries use this prefix to improve cross-lingual and out-of-vocabulary recall
-// See: https://huggingface.co/mixedbread-ai/mxbai-embed-large-v1
-const QUERY_PREFIX = 'Represent this sentence for searching relevant passages: ';
+// Asymmetric retrieval prefixes — documents stored plain, queries use prefix
+// mxbai: https://huggingface.co/mixedbread-ai/mxbai-embed-large-v1
+// qwen3: https://huggingface.co/Qwen/Qwen3-Embedding
+const MXBAI_QUERY_PREFIX = 'Represent this sentence for searching relevant passages: ';
+const QWEN3_QUERY_PREFIX = 'Instruct: Given a query, retrieve relevant passages that answer the query\nQuery: ';
 
 function applyQueryPrefix(text: string): string {
   const model = config.embedding.ollamaModel;
-  if (config.embedding.provider === 'ollama' && model.includes('mxbai')) {
-    return `${QUERY_PREFIX}${text}`;
-  }
+  if (config.embedding.provider !== 'ollama') return text;
+  if (model.includes('mxbai')) return `${MXBAI_QUERY_PREFIX}${text}`;
+  if (model.includes('qwen3-embedding')) return `${QWEN3_QUERY_PREFIX}${text}`;
   return text;
 }
 

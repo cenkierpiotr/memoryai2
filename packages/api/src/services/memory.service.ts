@@ -1,5 +1,6 @@
 import { query, withTransaction } from '../db/pool.js';
 import { embeddingService } from './embedding.service.js';
+import { rerank } from './reranker.service.js';
 import { contextBundleService } from './context-bundle.service.js';
 import { encrypt, decrypt, isEncrypted } from '../utils/encryption.js';
 import { auditService } from './audit.service.js';
@@ -168,7 +169,14 @@ export const memoryService = {
       ]
     );
 
-    const results = decryptResults(res.rows.map(r => ({ ...r, user_id: userId })), userId);
+    let results = decryptResults(res.rows.map(r => ({ ...r, user_id: userId })), userId);
+
+    // Rerank top candidates using cross-encoder for better precision
+    if (results.length > 1) {
+      const docs = results.map(r => r.content);
+      const rerankedOrder = await rerank(dto.query, docs);
+      results = rerankedOrder.slice(0, limit).map(i => results[i]);
+    }
 
     // Update access stats async (triggers auto-promotion to hot tier)
     if (results.length > 0) {

@@ -66,6 +66,13 @@ export const config = {
     everyNMessages: optionalNum('DISTILL_EVERY_N_MESSAGES', 50),
   },
 
+  reranker: {
+    enabled: optional('RERANKER_ENABLED', 'true') === 'true',
+    ollamaBaseUrl: optional('OLLAMA_BASE_URL', 'http://localhost:11434'),
+    model: optional('RERANKER_MODEL', 'qwen3-reranker:0.6b'),
+    topN: optionalNum('RERANKER_TOP_N', 20),
+  },
+
   mcp: {
     serverUrl: optional('MCP_SERVER_URL', 'http://localhost:3001/mcp'),
   },
