@@ -30,7 +30,11 @@ SELECT
   'ollama',
   COALESCE(
     (SELECT value FROM user_settings WHERE user_id = users.id AND key = 'embedding.ollamaBaseUrl'),
-    'http://localhost:11434'
+    COALESCE(
+      (SELECT value FROM user_settings WHERE user_id = users.id AND key = 'embedding.ollamaBaseUrl'),
+      current_setting('memoryai.ollama_base_url', true),
+      'http://host.docker.internal:11434'
+    )
   ),
   ARRAY['qwen3-embedding:0.6b', 'qwen2.5:7b-instruct-q4_K_M', 'qwen3.5:4b'],
   'Lokalny Ollama na serwerze Dell'
