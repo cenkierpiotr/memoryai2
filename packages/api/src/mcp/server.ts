@@ -419,7 +419,7 @@ async function handleTool(
         return { content: [{ type: 'text', text: 'No memories found matching your query.' }] };
       }
       const text = results.map(m =>
-        `[${m.type.toUpperCase()}] (score: ${m.combined_score.toFixed(2)}, importance: ${m.importance})\n${m.content}\n(saved: ${new Date(m.created_at).toLocaleDateString()})`
+        `[${m.type.toUpperCase()}] importance:${m.importance}\n${m.content}`
       ).join('\n\n');
       return { content: [{ type: 'text', text }] };
     }

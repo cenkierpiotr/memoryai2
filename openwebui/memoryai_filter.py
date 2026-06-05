@@ -141,8 +141,8 @@ class Filter:
         memories = self._search_memories(last_user_msg)
         entities = self._search_entities(last_user_msg) if self.valves.inject_entities else []
 
-        # Filter by score
-        memories = [m for m in memories if m.get("score", 0) >= self.valves.min_score]
+        # Filter by score (API returns combined_score, not score)
+        memories = [m for m in memories if m.get("combined_score", m.get("score", 0)) >= self.valves.min_score]
 
         if not memories and not entities:
             return body

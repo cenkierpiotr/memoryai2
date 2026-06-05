@@ -1567,16 +1567,14 @@ Po 1 roku aktywnego codziennego użytkowania (10 sesji/dzień, 5 wspomnień wyod
 
 ### Zużycie tokenów (Claude)
 
-MemoryAI deleguje obliczenia do Ollamy lokalnie — embeddingi i dystylacja **nie zużywają tokenów Claude**. Jedyny overhead to kontekst wstrzykiwany do okna rozmowy:
+MemoryAI deleguje obliczenia do Ollamy lokalnie — embeddingi i dystylacja **nie zużywają tokenów Claude**. MCP server zwraca sformatowany tekst (nie surowy JSON), więc overhead jest mały:
 
-| Komponent | Tokeny Claude | Częstotliwość | Uwagi |
-|-----------|--------------|---------------|-------|
-| Opisy 6 narzędzi MCP | ~900 | Raz na sesję | Stały koszt, ładowany przy starcie |
-| Wywołanie `memory_get_context` | ~23 | Per query | Sam JSON call |
-| Wstrzyknięty kontekst (10 wspomnień) | ~215 | Per query | Faktyczna pamięć |
-| Surowa odpowiedź API (JSON) | ~1600 | Per query | Widoczne przez model |
-| `memory_save` call + response | ~58 | Per zapis | Minimalne |
-| **Łącznie per zapytanie** | **~2800** | Per query | |
+| Komponent | Tokeny Claude | Częstotliwość |
+|-----------|--------------|---------------|
+| Opisy 6 narzędzi MCP | ~600–900 | **Raz na sesję** — stały koszt |
+| `memory_get_context` call + response | ~140 | **Raz na sesję** — lazy-load TTL |
+| `memory_search` call + response | ~125 | Per query (gdy używane) |
+| `memory_save` call + response | ~58 | Per zapis |
 
 Dystylacja i embeddingi używają **0 tokenów Claude** (Ollama lokalnie):
 
@@ -1585,16 +1583,8 @@ Dystylacja i embeddingi używają **0 tokenów Claude** (Ollama lokalnie):
 | Embedding wspomnienia | ~50 | Ollama — qwen3-embedding:0.6b |
 | Dystylacja sesji (6 wiad.) | ~300 | Ollama — qwen2.5:7b |
 
-**Overhead względny** (2800 tokenów) zależy od rozmiaru kontekstu rozmowy:
-
-| Kontekst rozmowy | Overhead pamięci |
-|-----------------|-----------------|
-| 10K tokenów | +28% |
-| 50K tokenów | +5.6% |
-| 100K tokenów | +2.8% |
-| 200K tokenów | +1.4% |
-
-W typowej sesji Claude Code (50K+ kontekstu) overhead MemoryAI wynosi **mniej niż 6%** tokenów Claude.
+**Całkowity overhead per sesja** (jednorazowo przy starcie): ~750–1050 tokenów.  
+Kolejne `memory_search` w tej samej sesji: ~125 tokenów każde.
 
 ### Opóźnienia sieciowe
 

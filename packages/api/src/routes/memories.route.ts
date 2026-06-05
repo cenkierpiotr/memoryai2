@@ -80,7 +80,11 @@ export async function memoriesRoutes(app: FastifyInstance): Promise<void> {
     const results = await memoryService.search(req.user.id, body);
     end();
     memoriesSearchTotal.inc();
-    return reply.send({ data: results, meta: { total: results.length } });
+    // Strip internal fields (debug scores, user identity) from search response.
+    // Keeps combined_score as the canonical relevance signal for consumers.
+    const slim = results.map(({ vector_score: _v, text_score: _t, recency_score: _r,
+      user_id: _u, session_id: _s, ...m }) => m);
+    return reply.send({ data: slim, meta: { total: slim.length } });
   });
 
   // GET /memories/core  — instant core context (phase 1, no vector)
