@@ -7,6 +7,7 @@
 
 import { Worker, type Job } from 'bullmq';
 import { connection, addDistillationJob, type DistillationJob } from './distillation.queue.js';
+import { addProactiveCheckJob } from './proactive-queue.js';
 import { sessionService } from '../services/session.service.js';
 import { memoryService } from '../services/memory.service.js';
 import { config } from '../config.js';
@@ -113,7 +114,12 @@ async function distillSession(sessionId: string, userId: string): Promise<number
     }));
 
   if (dtos.length > 0) {
-    await memoryService.createBatch(userId, dtos);
+    const saved = await memoryService.createBatch(userId, dtos);
+    // Enqueue proactive conflict check for the freshly inserted memories
+    const newIds = saved.map(m => m.id);
+    addProactiveCheckJob({ newMemoryIds: newIds, userId, sessionId }).catch((err: Error) => {
+      logger.error('distillation', `Failed to enqueue proactive check: ${err.message}`);
+    });
   }
 
   return dtos.length;

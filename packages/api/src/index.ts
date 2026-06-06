@@ -18,8 +18,11 @@ import { projectsRoutes } from './routes/projects.route.js';
 import { adminRoutes } from './routes/admin.route.js';
 import { proxyRoutes } from './routes/proxy.route.js';
 import { providersRoutes } from './routes/providers.route.js';
+import { importRoutes } from './routes/import.route.js';
+import { conflictsRoutes } from './routes/conflicts.route.js';
 import { mcpRoutes } from './mcp/server.js';
 import { startDistillationWorker, scheduleStaleSessionCheck, stopStaleSessionCheck } from './jobs/distillation.worker.js';
+import { startProactiveWorker } from './jobs/proactive.worker.js';
 import { closeBundleRedis } from './services/context-bundle.service.js';
 import { scheduleConsolidationCheck, stopConsolidationCheck } from './jobs/consolidation.worker.js';
 import { scheduleDeduplication, stopDeduplication } from './jobs/deduplication.worker.js';
@@ -105,6 +108,8 @@ await app.register(projectsRoutes, { prefix: '/v1' });
 await app.register(adminRoutes, { prefix: '/v1' });
 await app.register(proxyRoutes);
 await app.register(providersRoutes, { prefix: '/v1' });
+await app.register(importRoutes, { prefix: '/v1' });
+await app.register(conflictsRoutes, { prefix: '/v1' });
 await app.register(mcpRoutes);
 
 // ── Error Handler ────────────────────────────────────────────
@@ -150,6 +155,9 @@ async function start() {
     // Start background workers
     startDistillationWorker();
     app.log.info('Distillation worker started');
+
+    startProactiveWorker();
+    app.log.info('Proactive conflict-detection worker started');
 
     await scheduleStaleSessionCheck();
     app.log.info('Stale session checker started');

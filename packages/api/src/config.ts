@@ -82,6 +82,10 @@ export const config = {
     rateLimitRpm: optionalNum('RATE_LIMIT_RPM', 10000),
     encryptionKey: required('ENCRYPTION_KEY'),
   },
+
+  proactive: {
+    webhookUrl: optional('PROACTIVE_WEBHOOK_URL', ''),
+  },
 } as const;
 
 // Validate provider-specific API keys at startup
