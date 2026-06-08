@@ -8,6 +8,8 @@
 import { Queue } from 'bullmq';
 import { connection } from './distillation.queue.js';
 
+export { connection };
+
 export interface ProactiveCheckJob {
   /** IDs of memories that were just inserted by the distillation worker */
   newMemoryIds: string[];

@@ -19,6 +19,16 @@ const AUTO_SHARED_CATEGORIES: MemoryCategory[] = ['credentials', 'infrastructure
 // Categories whose content is encrypted at rest
 const ENCRYPTED_CATEGORIES: MemoryCategory[] = ['credentials'];
 
+// Polish-specific characters appear frequently in PL text
+const PL_CHARS = /[ąćęłńóśźżĄĆĘŁŃÓŚŹŻ]/g;
+
+function detectLanguage(text: string): string {
+  const matches = text.match(PL_CHARS);
+  if (!matches) return 'en';
+  // If >1% of characters are Polish-specific, classify as Polish
+  return matches.length / text.length > 0.01 ? 'pl' : 'en';
+}
+
 function prepareContent(content: string, category: MemoryCategory): string {
   return ENCRYPTED_CATEGORIES.includes(category) ? encrypt(content) : content;
 }
@@ -68,7 +78,7 @@ export const memoryService = {
         content,
         dto.importance ?? 0.5,
         dto.tags ?? [],
-        dto.language ?? 'auto',
+        dto.language && dto.language !== 'auto' ? dto.language : detectLanguage(dto.content),
         dto.pinned ?? false,
         isShared,
         JSON.stringify(dto.metadata ?? {}),
@@ -108,7 +118,8 @@ export const memoryService = {
         params.push(
           userId, dto.project_id ?? null, dto.session_id ?? null,
           dto.tier ?? 'warm', category, dto.type ?? 'fact', content,
-          dto.importance ?? 0.5, dto.tags ?? [], dto.language ?? 'auto',
+          dto.importance ?? 0.5, dto.tags ?? [],
+          dto.language && dto.language !== 'auto' ? dto.language : detectLanguage(dto.content),
           dto.pinned ?? false, isShared, JSON.stringify(dto.metadata ?? {}),
           vectorLiteral
         );

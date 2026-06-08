@@ -1,25 +1,28 @@
 /**
  * Shared LLM caller for background workers (distillation & consolidation).
  *
- * Centralises provider selection and enforces a timeout on every request
- * so workers never hang indefinitely waiting for an LLM response.
+ * Resilience chain:
+ *   1. Primary provider (callLLM)
+ *   2. Fallback provider (DISTILL_FALLBACK_PROVIDER, if configured)
+ *   3. Emergency rule-based extraction (never throws)
  */
 
 import { config } from '../config.js';
 
-/**
- * Call the configured LLM provider with the given prompt.
- *
- * @param prompt     The full prompt string to send.
- * @param timeoutMs  Maximum time to wait for a response (default: 2 minutes).
- */
-export async function callLLM(prompt: string, timeoutMs = 120_000): Promise<string> {
+type Provider = 'ollama' | 'gemini' | 'openai' | 'anthropic';
+
+async function callProvider(
+  provider: Provider,
+  model: string,
+  prompt: string,
+  timeoutMs: number,
+): Promise<string> {
   const signal = AbortSignal.timeout(timeoutMs);
 
-  switch (config.distillation.provider) {
+  switch (provider) {
     case 'gemini': {
       const res = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${config.distillation.model}:generateContent`,
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'x-goog-api-key': config.distillation.geminiApiKey },
@@ -45,7 +48,7 @@ export async function callLLM(prompt: string, timeoutMs = 120_000): Promise<stri
           Authorization: `Bearer ${config.distillation.openaiApiKey}`,
         },
         body: JSON.stringify({
-          model: config.distillation.model,
+          model,
           messages: [{ role: 'user', content: prompt }],
           temperature: 0.1,
         }),
@@ -65,7 +68,7 @@ export async function callLLM(prompt: string, timeoutMs = 120_000): Promise<stri
           'anthropic-version': '2023-06-01',
         },
         body: JSON.stringify({
-          model: config.distillation.model,
+          model,
           max_tokens: 2048,
           messages: [{ role: 'user', content: prompt }],
         }),
@@ -77,12 +80,12 @@ export async function callLLM(prompt: string, timeoutMs = 120_000): Promise<stri
     }
 
     default: {
-      // ollama (local)
+      // ollama
       const res = await fetch(`${config.distillation.ollamaBaseUrl}/api/generate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          model: config.distillation.model,
+          model,
           prompt,
           stream: false,
           options: { temperature: 0.1 },
@@ -93,5 +96,47 @@ export async function callLLM(prompt: string, timeoutMs = 120_000): Promise<stri
       const data = await res.json() as { response: string };
       return data.response;
     }
+  }
+}
+
+export async function callLLM(prompt: string, timeoutMs = 120_000): Promise<string> {
+  return callProvider(
+    config.distillation.provider as Provider,
+    config.distillation.model,
+    prompt,
+    timeoutMs,
+  );
+}
+
+/**
+ * Calls the primary LLM; on failure tries the fallback provider (if configured).
+ * Always resolves — returns empty string only when both fail.
+ */
+export async function callLLMWithFallback(prompt: string, timeoutMs = 120_000): Promise<string> {
+  try {
+    return await callProvider(
+      config.distillation.provider as Provider,
+      config.distillation.model,
+      prompt,
+      timeoutMs,
+    );
+  } catch (primaryErr) {
+    const fb = config.distillation.fallbackProvider;
+    if (fb) {
+      process.stderr.write(`[llm] primary failed (${(primaryErr as Error).message}), trying fallback ${fb}\n`);
+      try {
+        return await callProvider(
+          fb as Provider,
+          config.distillation.fallbackModel,
+          prompt,
+          timeoutMs,
+        );
+      } catch (fbErr) {
+        process.stderr.write(`[llm] fallback also failed: ${(fbErr as Error).message}\n`);
+      }
+    } else {
+      process.stderr.write(`[llm] primary failed (${(primaryErr as Error).message}), no fallback configured\n`);
+    }
+    return '';
   }
 }

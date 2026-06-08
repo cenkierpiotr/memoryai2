@@ -9,6 +9,7 @@
  */
 
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
+import { query } from '../db/pool.js';
 import { memoryService } from '../services/memory.service.js';
 import { entityService } from '../services/entity.service.js';
 import { sessionService } from '../services/session.service.js';
@@ -301,6 +302,16 @@ async function handleTool(
       const hasGlobalCore = globalCoreText.trim().length > 0;
       const hasProjectCore = projectCore.length > 0;
       const hasTopicMemories = topicMemories.length > 0 || topicEntities.length > 0;
+
+      // Touch Phase 1 memories (core bundle + project core) — they never go through
+      // search(), so without this their access_count stays 0 and tier decay misfires.
+      const phase1Ids = [
+        ...bundle.core_memories.map(m => m.id),
+        ...projectCore.map(m => m.id),
+      ].filter(Boolean);
+      if (phase1Ids.length > 0) {
+        query('SELECT touch_memories($1)', [phase1Ids]).catch(() => {});
+      }
 
       if (!hasGlobalCore && !hasProjectCore && !hasTopicMemories) {
         return {

@@ -12,18 +12,19 @@ import { sessionService } from '../services/session.service.js';
 import { memoryService } from '../services/memory.service.js';
 import { config } from '../config.js';
 import { query } from '../db/pool.js';
-import { callLLM } from '../utils/llm.js';
+import { callLLMWithFallback } from '../utils/llm.js';
+import { entityService } from '../services/entity.service.js';
 import { logger } from '../utils/logger.js';
 import type { CreateMemoryDto, MemoryType, MemoryTier, MemoryCategory } from '@memoryai/shared';
 
 // ── Distillation Logic ──────────────────────────────────────
 
-const DISTILLATION_PROMPT = (conversation: string) => `You are a memory extraction system. Analyze this conversation and extract important information for future sessions.
+const DISTILLATION_PROMPT = (conversation: string) => `You are a memory extraction system. Analyze this conversation and extract important facts, decisions, and entities for future sessions.
 
 CONVERSATION:
 ${conversation}
 
-Return ONLY valid JSON, no other text.
+Return ONLY valid JSON, no other text, no markdown.
 
 Format:
 {
@@ -32,35 +33,57 @@ Format:
       "content": "Concise self-contained fact (max 150 chars)",
       "type": "fact|decision|preference|instruction|entity_relation|summary",
       "tier": "core|hot|warm",
-      "category": "user_profile|meta_instructions|active_project|technical_stack|preferences|workflow|domain_knowledge|decisions|constraints|relationships|temporal|general",
+      "category": "user_profile|meta_instructions|active_project|technical_stack|preferences|workflow|domain_knowledge|decisions|constraints|relationships|infrastructure|general",
       "importance": 0.0-1.0
+    }
+  ],
+  "entities": [
+    {
+      "name": "Entity name (person, project, company, tool, server)",
+      "type": "person|project|company|tool|concept|place|other",
+      "facts": ["Short fact about this entity (servers/infrastructure → tool)"]
     }
   ]
 }
 
-Rules:
-- content: max 150 characters, dense and self-contained. Omit filler words.
-- tier: core=user identity/standing rules, hot=active project/recent decisions, warm=general facts
-- category: choose the most specific match from the enum list
-- importance: 0.9-1.0=critical rules/decisions, 0.7-0.8=important facts, 0.5-0.6=context, 0.3-0.4=minor
-- Skip greetings, pleasantries, and trivial content
-- Maximum 15 memories per session
-- CRITICAL: Write content EXACTLY in the language of the conversation. If conversation is in Polish, write Polish. If in English, write English. NEVER translate.
-- Polish decision pattern: "Zdecydowano X zamiast Y — powód"
-- Polish preference pattern: "Preferuje X nad Y"
-- Polish instruction pattern: "Zawsze X kiedy Y"
-- English decision pattern: "Chose X over Y — reason"
-- English preference pattern: "Prefers X over Y"
-- English instruction pattern: "Always X when Y"
-- Include one summary memory if conversation covered multiple topics`;
+=== MEMORY RULES ===
+- content: max 150 chars, dense, self-contained (reader has no prior context)
+- Maximum 15 memories total
+- Skip greetings, pleasantries, trivial chit-chat
+- CRITICAL: Write content in the SAME language as the conversation (Polish→Polish, English→English)
+- Polish decision: "Zdecydowano X zamiast Y — powód", preference: "Preferuje X nad Y", instruction: "Zawsze X kiedy Y"
+- English decision: "Chose X over Y — reason", preference: "Prefers X over Y", instruction: "Always X when Y"
 
-const VALID_TYPES: MemoryType[] = ['fact', 'decision', 'preference', 'instruction', 'entity_relation', 'summary'];
-const VALID_TIERS: MemoryTier[] = ['core', 'hot', 'warm', 'cold'];
-const VALID_CATEGORIES: MemoryCategory[] = [
-  'user_profile','meta_instructions','active_project','technical_stack',
-  'preferences','workflow','domain_knowledge','decisions','constraints',
-  'relationships','temporal','archive','general',
-];
+=== TIER RULES ===
+- core: permanent user identity, standing rules that NEVER change ("always use TypeScript", "user is senior dev")
+- hot: active project details, recent decisions, current tasks (last 1-4 weeks)
+- warm: general facts, past projects, background knowledge
+
+=== IMPORTANCE RULES ===
+- 0.9-1.0: critical standing rules, security constraints, irreversible decisions
+- 0.7-0.8: important project facts, technology choices, key decisions
+- 0.5-0.6: useful context, workflow details, preferences
+- 0.3-0.4: minor details, temporary state
+
+=== CATEGORY RULES (pick the MOST specific — use 'general' ONLY if nothing fits) ===
+- user_profile: who the user is, their role, skills, background
+- meta_instructions: rules for the AI assistant behavior ("always do X", "never do Y")
+- active_project: current project status, tasks, next steps, blockers
+- technical_stack: languages, frameworks, libraries, versions, tools used
+- decisions: architectural or product decisions with rationale
+- preferences: user likes/dislikes, style preferences, chosen approaches
+- workflow: how the user works, processes, git flow, deployment process
+- domain_knowledge: business logic, domain-specific facts, industry knowledge
+- constraints: hard limits, deadlines, compliance requirements, resource limits
+- relationships: team members, clients, stakeholders
+- infrastructure: servers, cloud, Docker, networking, environments
+- general: LAST RESORT — only if the fact genuinely spans multiple categories or fits none
+
+=== ENTITY RULES ===
+- Extract named things: projects, people, servers, tools, companies
+- Maximum 5 entities per session
+- facts: 1-3 short facts per entity, max 100 chars each
+- Skip generic entities (e.g. "the user", "Claude")`;
 
 interface DistillationResult {
   memories: Array<{
@@ -70,7 +93,21 @@ interface DistillationResult {
     category?: string;
     importance: number;
   }>;
+  entities?: Array<{
+    name: string;
+    type: string;
+    facts: string[];
+  }>;
 }
+
+const VALID_TYPES: MemoryType[] = ['fact', 'decision', 'preference', 'instruction', 'entity_relation', 'summary'];
+const VALID_TIERS: MemoryTier[] = ['core', 'hot', 'warm', 'cold'];
+const VALID_CATEGORIES: MemoryCategory[] = [
+  'user_profile','meta_instructions','active_project','technical_stack',
+  'preferences','workflow','domain_knowledge','decisions','constraints',
+  'relationships','temporal','archive','infrastructure','general',
+];
+const VALID_ENTITY_TYPES = ['person', 'project', 'company', 'tool', 'concept', 'place', 'other'] as const;
 
 async function distillSession(sessionId: string, userId: string): Promise<number> {
   const messages = await sessionService.getMessages(userId, sessionId, 200);
@@ -81,7 +118,7 @@ async function distillSession(sessionId: string, userId: string): Promise<number
     .map(m => `${m.role.toUpperCase()}: ${m.content}`)
     .join('\n\n');
 
-  const rawResponse = await callLLM(DISTILLATION_PROMPT(conversation));
+  const rawResponse = await callLLMWithFallback(DISTILLATION_PROMPT(conversation));
 
   let result: DistillationResult;
   try {
@@ -113,16 +150,34 @@ async function distillSession(sessionId: string, userId: string): Promise<number
       project_id: session?.project_id,
     }));
 
+  let memoriesCreated = 0;
   if (dtos.length > 0) {
     const saved = await memoryService.createBatch(userId, dtos);
-    // Enqueue proactive conflict check for the freshly inserted memories
+    memoriesCreated = saved.length;
     const newIds = saved.map(m => m.id);
     addProactiveCheckJob({ newMemoryIds: newIds, userId, sessionId }).catch((err: Error) => {
       logger.error('distillation', `Failed to enqueue proactive check: ${err.message}`);
     });
   }
 
-  return dtos.length;
+  // Extract and upsert entities
+  if (result.entities && result.entities.length > 0) {
+    const entitiesSlice = result.entities.slice(0, 5);
+    await Promise.allSettled(
+      entitiesSlice
+        .filter(e => e.name?.length > 1 && VALID_ENTITY_TYPES.includes(e.type as typeof VALID_ENTITY_TYPES[number]))
+        .map(e =>
+          entityService.upsert(userId, {
+            name: e.name.slice(0, 100),
+            type: e.type as typeof VALID_ENTITY_TYPES[number],
+            facts: (e.facts ?? []).slice(0, 3).map(f => ({ content: f.slice(0, 100) })),
+            project_id: session?.project_id,
+          })
+        )
+    );
+  }
+
+  return memoriesCreated;
 }
 
 // ── Worker ──────────────────────────────────────────────────

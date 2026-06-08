@@ -58,6 +58,10 @@ export const config = {
   distillation: {
     provider: optional('DISTILL_PROVIDER', 'ollama') as 'ollama' | 'gemini' | 'openai' | 'anthropic',
     model: optional('DISTILL_MODEL', 'qwen2.5:7b'),
+    // Fallback provider used when the primary LLM fails (e.g. Ollama timeout).
+    // Set DISTILL_FALLBACK_PROVIDER=gemini + GEMINI_API_KEY to enable.
+    fallbackProvider: optional('DISTILL_FALLBACK_PROVIDER', '') as '' | 'ollama' | 'gemini' | 'openai' | 'anthropic',
+    fallbackModel: optional('DISTILL_FALLBACK_MODEL', 'gemini-2.0-flash'),
     ollamaBaseUrl: optional('OLLAMA_BASE_URL', 'http://localhost:11434'),
     geminiApiKey: optional('GEMINI_API_KEY', ''),
     openaiApiKey: optional('OPENAI_API_KEY', ''),
