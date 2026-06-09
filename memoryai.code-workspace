@@ -1,0 +1,172 @@
+{
+  "folders": [
+    {
+      "name": "MemoryAI (root)",
+      "path": "/config/memoryai"
+    },
+    {
+      "name": "API",
+      "path": "/config/memoryai/packages/api"
+    },
+    {
+      "name": "Worker",
+      "path": "/config/memoryai/packages/worker"
+    },
+    {
+      "name": "Dashboard",
+      "path": "/config/memoryai/packages/dashboard"
+    },
+    {
+      "name": "SDK",
+      "path": "/config/memoryai/packages/sdk"
+    },
+    {
+      "name": "Shared",
+      "path": "/config/memoryai/packages/shared"
+    }
+  ],
+  "settings": {
+    "editor.formatOnSave": true,
+    "editor.defaultFormatter": "esbenp.prettier-vscode",
+    "editor.tabSize": 2,
+    "editor.insertSpaces": true,
+    "typescript.tsdk": "/config/memoryai/node_modules/typescript/lib",
+    "typescript.preferences.importModuleSpecifier": "non-relative",
+    "typescript.inlayHints.parameterNames.enabled": "all",
+    "typescript.inlayHints.variableTypes.enabled": true,
+    "typescript.inlayHints.functionLikeReturnTypes.enabled": true,
+    "files.exclude": {
+      "**/node_modules": true,
+      "**/dist": true,
+      "**/.turbo": true
+    },
+    "search.exclude": {
+      "**/node_modules": true,
+      "**/dist": true
+    },
+    "eslint.workingDirectories": [
+      { "directory": "/config/memoryai", "changeProcessCWD": true }
+    ],
+    "docker.defaultRegistryPath": "",
+    "files.associations": {
+      "*.env*": "dotenv",
+      "docker-compose*.yml": "dockercompose"
+    }
+  },
+  "extensions": {
+    "recommendations": [
+      "dbaeumer.vscode-eslint",
+      "esbenp.prettier-vscode",
+      "ms-azuretools.vscode-docker",
+      "ms-vscode.vscode-typescript-next",
+      "bradlc.vscode-tailwindcss",
+      "mikestead.dotenv",
+      "humao.rest-client",
+      "ms-vscode-remote.remote-ssh"
+    ]
+  },
+  "tasks": {
+    "version": "2.0.0",
+    "tasks": [
+      {
+        "label": "Docker: start all",
+        "type": "shell",
+        "command": "cd /config/memoryai && docker compose -f docker/docker-compose.yml --env-file docker/.env up -d",
+        "group": "build",
+        "presentation": { "reveal": "always", "panel": "shared" }
+      },
+      {
+        "label": "Docker: stop all",
+        "type": "shell",
+        "command": "cd /config/memoryai && docker compose -f docker/docker-compose.yml down",
+        "group": "build",
+        "presentation": { "reveal": "always", "panel": "shared" }
+      },
+      {
+        "label": "Docker: restart API",
+        "type": "shell",
+        "command": "cd /config/memoryai && docker compose -f docker/docker-compose.yml --env-file docker/.env up -d api",
+        "group": "build",
+        "presentation": { "reveal": "always", "panel": "shared" }
+      },
+      {
+        "label": "Docker: logs API",
+        "type": "shell",
+        "command": "docker logs -f memoryai_api",
+        "group": "test",
+        "presentation": { "reveal": "always", "panel": "dedicated" }
+      },
+      {
+        "label": "Docker: logs worker",
+        "type": "shell",
+        "command": "docker logs -f memoryai_worker",
+        "group": "test",
+        "presentation": { "reveal": "always", "panel": "dedicated" }
+      },
+      {
+        "label": "DB: run migrations",
+        "type": "shell",
+        "command": "cd /config/memoryai && npm run db:migrate -w packages/api",
+        "group": "build",
+        "presentation": { "reveal": "always", "panel": "shared" }
+      },
+      {
+        "label": "Build: all packages",
+        "type": "shell",
+        "command": "cd /config/memoryai && npm run build",
+        "group": { "kind": "build", "isDefault": true },
+        "presentation": { "reveal": "always", "panel": "shared" }
+      },
+      {
+        "label": "Test: run all",
+        "type": "shell",
+        "command": "cd /config/memoryai && npm test",
+        "group": { "kind": "test", "isDefault": true },
+        "presentation": { "reveal": "always", "panel": "shared" }
+      },
+      {
+        "label": "Re-embed: migrate memories to current model",
+        "type": "shell",
+        "command": "cd /config/memoryai && node scripts/reembed.mjs",
+        "group": "build",
+        "presentation": { "reveal": "always", "panel": "shared" }
+      },
+      {
+        "label": "Git: push to GitHub",
+        "type": "shell",
+        "command": "cd /config/memoryai && git add -A && git commit -m \"update\" && git push",
+        "group": "build",
+        "presentation": { "reveal": "always", "panel": "shared" }
+      }
+    ]
+  },
+  "launch": {
+    "version": "0.2.0",
+    "configurations": [
+      {
+        "name": "API: debug (local)",
+        "type": "node",
+        "request": "launch",
+        "program": "${workspaceFolder}/packages/api/dist/index.js",
+        "preLaunchTask": "Build: all packages",
+        "env": {
+          "NODE_ENV": "development"
+        },
+        "envFile": "${workspaceFolder}/docker/.env",
+        "skipFiles": ["<node_internals>/**"],
+        "outFiles": ["${workspaceFolder}/packages/*/dist/**/*.js"]
+      },
+      {
+        "name": "API: attach to Docker",
+        "type": "node",
+        "request": "attach",
+        "port": 9229,
+        "address": "localhost",
+        "restart": true,
+        "localRoot": "${workspaceFolder}/packages/api",
+        "remoteRoot": "/app/packages/api",
+        "skipFiles": ["<node_internals>/**"]
+      }
+    ]
+  }
+}
