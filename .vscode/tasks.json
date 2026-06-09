@@ -1,0 +1,89 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Docker: start all",
+      "type": "shell",
+      "command": "docker compose -f docker/docker-compose.yml --env-file docker/.env up -d",
+      "group": "build",
+      "presentation": { "reveal": "always", "panel": "shared" }
+    },
+    {
+      "label": "Docker: stop all",
+      "type": "shell",
+      "command": "docker compose -f docker/docker-compose.yml down",
+      "group": "build",
+      "presentation": { "reveal": "always", "panel": "shared" }
+    },
+    {
+      "label": "Docker: restart API",
+      "type": "shell",
+      "command": "docker compose -f docker/docker-compose.yml --env-file docker/.env up -d api",
+      "group": "build",
+      "presentation": { "reveal": "always", "panel": "shared" }
+    },
+    {
+      "label": "Docker: rebuild API",
+      "type": "shell",
+      "command": "docker compose -f docker/docker-compose.yml --env-file docker/.env up -d --build api",
+      "group": "build",
+      "presentation": { "reveal": "always", "panel": "shared" }
+    },
+    {
+      "label": "Docker: logs API",
+      "type": "shell",
+      "command": "docker logs -f memoryai_api",
+      "group": "test",
+      "presentation": { "reveal": "always", "panel": "dedicated" }
+    },
+    {
+      "label": "Docker: logs worker",
+      "type": "shell",
+      "command": "docker logs -f memoryai_worker",
+      "group": "test",
+      "presentation": { "reveal": "always", "panel": "dedicated" }
+    },
+    {
+      "label": "DB: run migrations",
+      "type": "shell",
+      "command": "npm run db:migrate -w packages/api",
+      "group": "build",
+      "presentation": { "reveal": "always", "panel": "shared" }
+    },
+    {
+      "label": "Build: all packages",
+      "type": "shell",
+      "command": "npm run build",
+      "group": { "kind": "build", "isDefault": true },
+      "presentation": { "reveal": "always", "panel": "shared" }
+    },
+    {
+      "label": "Build: shared only",
+      "type": "shell",
+      "command": "npm run build -w packages/shared",
+      "group": "build",
+      "presentation": { "reveal": "always", "panel": "shared" }
+    },
+    {
+      "label": "Build: API only",
+      "type": "shell",
+      "command": "npm run build -w packages/api",
+      "group": "build",
+      "presentation": { "reveal": "always", "panel": "shared" }
+    },
+    {
+      "label": "Test: run all",
+      "type": "shell",
+      "command": "npm test",
+      "group": { "kind": "test", "isDefault": true },
+      "presentation": { "reveal": "always", "panel": "shared" }
+    },
+    {
+      "label": "Re-embed: migrate memories to current model",
+      "type": "shell",
+      "command": "node scripts/reembed.mjs",
+      "group": "build",
+      "presentation": { "reveal": "always", "panel": "shared" }
+    }
+  ]
+}

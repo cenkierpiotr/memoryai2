@@ -1,0 +1,39 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "API: debug (local)",
+      "type": "node",
+      "request": "launch",
+      "program": "${workspaceFolder}/packages/api/dist/index.js",
+      "preLaunchTask": "Build: all packages",
+      "env": {
+        "NODE_ENV": "development"
+      },
+      "envFile": "${workspaceFolder}/docker/.env",
+      "skipFiles": ["<node_internals>/**"],
+      "outFiles": ["${workspaceFolder}/packages/*/dist/**/*.js"]
+    },
+    {
+      "name": "API: attach to Docker (port 9229)",
+      "type": "node",
+      "request": "attach",
+      "port": 9229,
+      "address": "localhost",
+      "restart": true,
+      "localRoot": "${workspaceFolder}/packages/api",
+      "remoteRoot": "/app/packages/api",
+      "skipFiles": ["<node_internals>/**"]
+    },
+    {
+      "name": "Worker: debug (local)",
+      "type": "node",
+      "request": "launch",
+      "program": "${workspaceFolder}/packages/worker/dist/index.js",
+      "preLaunchTask": "Build: all packages",
+      "envFile": "${workspaceFolder}/docker/.env",
+      "skipFiles": ["<node_internals>/**"],
+      "outFiles": ["${workspaceFolder}/packages/*/dist/**/*.js"]
+    }
+  ]
+}

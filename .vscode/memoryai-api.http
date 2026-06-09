@@ -1,0 +1,57 @@
+# MemoryAI REST API — REST Client test file
+# Install extension: humao.rest-client
+# Ctrl+Alt+R to run request
+
+@base = http://localhost:3001
+@apiKey = {{$dotenv ADMIN_API_KEY}}
+
+### Health check
+GET {{base}}/health
+
+### Get memory context
+GET {{base}}/api/context
+Authorization: Bearer {{apiKey}}
+
+### Search memories
+POST {{base}}/api/memories/search
+Authorization: Bearer {{apiKey}}
+Content-Type: application/json
+
+{
+  "query": "projekt memoryai",
+  "limit": 5
+}
+
+### Save memory
+POST {{base}}/api/memories
+Authorization: Bearer {{apiKey}}
+Content-Type: application/json
+
+{
+  "content": "Test memory from REST client",
+  "type": "fact",
+  "tier": "warm",
+  "importance": 0.7,
+  "tags": ["test"]
+}
+
+### List memories
+GET {{base}}/api/memories?limit=10
+Authorization: Bearer {{apiKey}}
+
+### Get core context
+GET {{base}}/api/memories/core
+Authorization: Bearer {{apiKey}}
+
+### Get stats
+GET {{base}}/api/memories/stats
+Authorization: Bearer {{apiKey}}
+
+### Session end (trigger distillation)
+POST {{base}}/api/session/end
+Authorization: Bearer {{apiKey}}
+Content-Type: application/json
+
+{
+  "summary": "Test session ended from REST client"
+}
