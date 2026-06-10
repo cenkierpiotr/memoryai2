@@ -15,6 +15,7 @@ Register in MCP config:
   }
 """
 
+import os
 import sys
 import json
 import re
@@ -28,7 +29,7 @@ import logging
 logging.basicConfig(level=logging.WARNING, stream=sys.stderr)
 log = logging.getLogger("mcp-local-ai")
 
-OLLAMA_URL = "http://100.99.158.2:11434"
+OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 
 # ── Model registry ─────────────────────────────────────────────────────────────
 
@@ -279,7 +280,7 @@ TOOLS = [
     {
         "name": "ask_ollama",
         "description": (
-            "Ask a locally running Ollama model on the Dell server (ollama/100.99.158.2). "
+            "Ask a locally running Ollama model (OLLAMA_URL env, default: localhost:11434). "
             "Defaults to 'auto' — automatically uses whichever model is loaded in VRAM (no cold start). "
             "Only specify a model name if you need a specific one (may cause 30-60s cold start). "
             "Best for: private/local data, code tasks (deepseek-coder:6.7b), quick inference."

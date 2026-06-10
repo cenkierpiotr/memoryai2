@@ -275,7 +275,7 @@ Claude Code CLI
         │
         └─► mcp-local-ai.py
               │
-              └─► HTTP POST to http://100.99.158.2:11434/api/generate
+              └─► HTTP POST to http://192.168.1.100:11434/api/generate
                     body: {"model": "qwen2.5:14b", "prompt": "...", "stream": false}
                     │
                     └─► Ollama (local, Dell server)
@@ -915,7 +915,7 @@ Creates or updates a named entity in the knowledge graph (upsert by name). Entit
   "name": "Dell home server",
   "type": "server",
   "facts": [
-    "Tailscale IP: 100.99.158.2",
+    "Tailscale IP: 192.168.1.100",
     "Runs Docker, Ollama, n8n, and MemoryAI",
     "Primary deployment target for all self-hosted projects",
     "24 GB RAM, AMD Ryzen 5 5600G"
@@ -1131,7 +1131,7 @@ curl -X POST http://localhost:3001/v1/entities \
     "name": "Dell home server",
     "type": "server",
     "facts": [
-      {"content": "Tailscale IP: 100.99.158.2"},
+      {"content": "Tailscale IP: 192.168.1.100"},
       {"content": "Runs Docker, Ollama, n8n, MemoryAI, Postgres"},
       {"content": "Primary deployment target for self-hosted projects"},
       {"content": "24 GB RAM, AMD Ryzen 5 5600G, Ubuntu 22.04"}

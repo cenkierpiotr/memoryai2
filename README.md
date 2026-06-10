@@ -275,7 +275,7 @@ Claude Code CLI
         │
         └─► mcp-local-ai.py
               │
-              └─► HTTP POST do http://100.99.158.2:11434/api/generate
+              └─► HTTP POST do http://192.168.1.100:11434/api/generate
                     treść: {"model": "qwen2.5:14b", "prompt": "...", "stream": false}
                     │
                     └─► Ollama (lokalnie, serwer Dell)
@@ -1015,7 +1015,7 @@ Tworzy lub aktualizuje nazwaną encję w grafie wiedzy (upsert po nazwie). Encje
   "name": "Dell home server",
   "type": "server",
   "facts": [
-    "Tailscale IP: 100.99.158.2",
+    "Tailscale IP: 192.168.1.100",
     "Uruchamia Docker, Ollama, n8n i MemoryAI",
     "Główny cel wdrożenia dla wszystkich projektów samodzielnie hostowanych",
     "24 GB RAM, AMD Ryzen 5 5600G"
@@ -1231,7 +1231,7 @@ curl -X POST http://localhost:3001/v1/entities \
     "name": "Dell home server",
     "type": "server",
     "facts": [
-      {"content": "Tailscale IP: 100.99.158.2"},
+      {"content": "Tailscale IP: 192.168.1.100"},
       {"content": "Runs Docker, Ollama, n8n, MemoryAI, Postgres"},
       {"content": "Primary deployment target for self-hosted projects"},
       {"content": "24 GB RAM, AMD Ryzen 5 5600G, Ubuntu 22.04"}

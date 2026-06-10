@@ -21,8 +21,8 @@ from pydantic import BaseModel, Field
 class Filter:
     class Valves(BaseModel):
         memoryai_url: str = Field(
-            default="http://100.99.158.2:3010",
-            description="MemoryAI API base URL (use Tailscale IP or public Funnel URL)",
+            default="http://localhost:3010",
+            description="MemoryAI API base URL",
         )
         memoryai_token: str = Field(
             default="",

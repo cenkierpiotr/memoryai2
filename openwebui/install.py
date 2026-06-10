@@ -13,7 +13,7 @@ Usage:
 import sqlite3, json, time, sys, os
 
 # Config — edit these
-MEMORYAI_URL = os.environ.get('MEMORYAI_URL', 'http://100.99.158.2:3010')
+MEMORYAI_URL = os.environ.get('MEMORYAI_URL', 'http://localhost:3010')
 MEMORYAI_TOKEN = os.environ.get('MEMORYAI_TOKEN', '')
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = '/app/backend/data/webui.db'

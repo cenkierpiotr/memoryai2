@@ -198,7 +198,7 @@ echo "╚═══════════════════════�
 echo ""
 warn "ACTION REQUIRED: Add MemoryAI to your existing backup schedule."
 echo ""
-echo "  Add these to your backup scripts on Dell (100.99.158.2):"
+echo "  Add these to your backup scripts on Dell (YOUR_SERVER_IP):"
 echo ""
 echo -e "  ${YELLOW}1. PostgreSQL database:${NC}"
 echo "     docker exec memoryai_postgres pg_dump -U memoryai memoryai | gzip > memoryai_\$(date +%Y%m%d).sql.gz"

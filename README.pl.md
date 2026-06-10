@@ -504,7 +504,7 @@ Tworzy lub aktualizuje encję w bazie wiedzy (upsert po nazwie). Encje akumuluj�
   "name": "Serwer Dell",
   "type": "system",
   "facts": [
-    "IP 100.99.158.2 przez Tailscale",
+    "IP 192.168.1.100 przez Tailscale",
     "Uruchamia Docker, Ollama, n8n",
     "Główny cel deployment'u dla self-hosted projektów"
   ]
@@ -663,7 +663,7 @@ Claude Code
 
 Claude Code
   └─► mcp__local-ai__ask_ollama("wyjaśnij algorytm")
-        └─► HTTP POST do Ollama API (100.99.158.2:11434)
+        └─► HTTP POST do Ollama API (192.168.1.100:11434)
               └─► lokalna inferencja (brak internetu)
                     └─► odpowiedź zwrócona do Claude
 ```
@@ -769,7 +769,7 @@ curl -X POST http://localhost:3001/v1/entities \
     "name": "Serwer Dell",
     "type": "other",
     "facts": [
-      {"content": "IP 100.99.158.2 przez Tailscale"},
+      {"content": "IP 192.168.1.100 przez Tailscale"},
       {"content": "Uruchamia Docker, Ollama i n8n"},
       {"content": "Główny cel deployment'u self-hosted projektów"}
     ]

@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field
 class Tools:
     class Valves(BaseModel):
         memoryai_url: str = Field(
-            default="http://100.99.158.2:3010",
+            default="http://localhost:3010",
             description="MemoryAI API base URL",
         )
         memoryai_token: str = Field(

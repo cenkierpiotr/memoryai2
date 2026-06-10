@@ -16,6 +16,7 @@
 import { query } from '../db/pool.js';
 import type { ContextBundle, CoreMemoryJson, EntityJson } from '@memoryai/shared';
 import { config } from '../config.js';
+import { decrypt, isEncrypted } from '../utils/encryption.js';
 import { Redis } from 'ioredis';
 
 const redis = new Redis(config.redis.url, {
@@ -139,9 +140,10 @@ export const contextBundleService = {
 
     if (bundle.core_memories.length > 0) {
       for (const m of bundle.core_memories) {
-        if (m.content.includes('Not yet populated') || m.content.includes('Not yet determined')) continue;
+        const content = isEncrypted(m.content) ? decrypt(m.content) : m.content;
+        if (content.includes('Not yet populated') || content.includes('Not yet determined')) continue;
         const cat = m.category !== 'general' ? `[${m.category}] ` : '';
-        lines.push(`${cat}${truncate(m.content)}`);
+        lines.push(`${cat}${truncate(content)}`);
       }
     }
 
